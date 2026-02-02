@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from layers.Mamba_EncDec import Encoder, EncoderLayer
 from layers.Embed import DataEmbedding_inverted
-from layer.ExtraModules import SeriesDecomp
+from layers.ExtraModules import SeriesDecomp
 from mamba_ssm import Mamba
 class CrossVariableAttention(nn.Module):
     def __init__(self, d_model):
