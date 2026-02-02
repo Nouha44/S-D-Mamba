@@ -28,26 +28,30 @@ class CrossVariableAttention(nn.Module):
         self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=num_heads, batch_first=True)
 
     def forward(self, x):
-        # x: [B, L, N] -> treat N as tokens
-        x_perm = x.permute(0, 2, 1)  # B N L
-        attn_out, _ = self.attn(x_perm, x_perm, x_perm)
-        return attn_out.permute(0, 2, 1)  # B L N
+        # x: [B, L, D] -> treat L as sequence, D as embedding dim
+        attn_out, _ = self.attn(x, x, x)
+        return attn_out  # [B, L, D]
 
 # ----------------------------
 # MSM Model
 # ----------------------------
 class Model(nn.Module):
-    def __init__(self, configs):
+    def __init__(self, configs, num_vars=1):
         super().__init__()
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
         self.use_norm = configs.use_norm
+        self.num_vars = num_vars  # N
 
+        # ----------------------------
         # Embedding
+        # ----------------------------
         self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model,
                                                     configs.embed, configs.freq, configs.dropout)
 
-        # Encoder layers
+        # ----------------------------
+        # Encoder Layers
+        # ----------------------------
         self.encoder = Encoder(
             [
                 EncoderLayer(
@@ -65,10 +69,23 @@ class Model(nn.Module):
 
         self.projector = nn.Linear(configs.d_model, configs.pred_len, bias=True)
 
-        # New Blocks
+        # ----------------------------
+        # Series Decomposition + Cross-Variable Attention
+        # ----------------------------
         self.decomp = SeriesDecomp(kernel_size=25)
+
+        # Linear projection N -> d_model before attention
+        self.proj_in = nn.Linear(self.num_vars, configs.d_model)
+
+        # Cross-variable attention
         self.cross_att = CrossVariableAttention(d_model=configs.d_model, num_heads=4)
 
+        # Linear projection back d_model -> N after attention
+        self.proj_out = nn.Linear(configs.d_model, self.num_vars)
+
+    # ----------------------------
+    # Forecast Function
+    # ----------------------------
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         if self.use_norm:
             means = x_enc.mean(1, keepdim=True).detach()
@@ -77,12 +94,18 @@ class Model(nn.Module):
             x_enc /= stdev
 
         # Embedding
-        enc_out = self.enc_embedding(x_enc, x_mark_enc)  # B L N -> B L D
+        enc_out = self.enc_embedding(x_enc, x_mark_enc)  # B L N -> B L N (or B L D if embedding outputs D)
 
         # ----------------------------
-        # Decompose
+        # Series Decomposition
         # ----------------------------
         trend, residual = self.decomp(enc_out)  # B L N
+
+        # ----------------------------
+        # Project to d_model
+        # ----------------------------
+        trend = self.proj_in(trend)       # B L D
+        residual = self.proj_in(residual) # B L D
 
         # ----------------------------
         # Encoder Processing
@@ -99,9 +122,14 @@ class Model(nn.Module):
         enc_out = trend_att + residual_att  # combine components
 
         # ----------------------------
-        # Projection to prediction length
+        # Project back to original variable dimension
         # ----------------------------
-        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :x_enc.shape[2]]  # B S N
+        enc_out = self.proj_out(enc_out)  # B L N
+
+        # ----------------------------
+        # Final projection to prediction length
+        # ----------------------------
+        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :self.num_vars]  # B S N
 
         if self.use_norm:
             dec_out = dec_out * stdev[:, 0, :].unsqueeze(1)
@@ -109,6 +137,9 @@ class Model(nn.Module):
 
         return dec_out
 
+    # ----------------------------
+    # Forward
+    # ----------------------------
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
         return dec_out[:, -self.pred_len:, :]  # [B, L, N]
