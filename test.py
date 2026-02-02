@@ -48,7 +48,8 @@ class WeatherDataset(Dataset):
 # LOAD + SPLIT + SCALE (NO LEAKAGE)
 # =====================================================
 df = pd.read_csv(CSV_PATH)
-values = df.iloc[:, 1:].values.astype("float32")
+values = df["values"].values.astype("float32").reshape(-1, 1)
+
 
 n = len(values)
 train_end = int(0.7 * n)
