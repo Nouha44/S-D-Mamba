@@ -2,29 +2,40 @@ import torch
 import torch.nn as nn
 from layers.Mamba_EncDec import Encoder, EncoderLayer
 from layers.Embed import DataEmbedding_inverted
-from layers.ExtraModules import SeriesDecomp
 from mamba_ssm import Mamba
-class CrossVariableAttention(nn.Module):
-    def __init__(self, d_model):
+
+# ----------------------------
+# Series Decomposition Block
+# ----------------------------
+class SeriesDecomp(nn.Module):
+    def __init__(self, kernel_size=25):
         super().__init__()
-        self.qkv = nn.Linear(d_model, d_model * 3)
-        self.softmax = nn.Softmax(dim=-1)
-        self.proj = nn.Linear(d_model, d_model)
+        self.moving_avg = nn.AvgPool1d(kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
 
-    def forward(self, x):  # x: [B, L, N]
-        # Transpose to [B, N, L] to treat variables as tokens
-        x = x.transpose(1, 2)
-        B, N, L = x.shape
-        qkv = self.qkv(x)  # [B, N, 3*d_model]
-        q, k, v = torch.chunk(qkv, 3, dim=-1)
-        attn = torch.bmm(q, k.transpose(1, 2)) / (L ** 0.5)
-        attn = self.softmax(attn)
-        out = torch.bmm(attn, v)
-        out = self.proj(out)
-        # Back to [B, L, N]
-        return out.transpose(1, 2)
+    def forward(self, x):
+        # x: [B, L, N]
+        x_perm = x.permute(0, 2, 1)  # B N L
+        trend = self.moving_avg(x_perm).permute(0, 2, 1)  # B L N
+        residual = x - trend
+        return trend, residual
 
+# ----------------------------
+# Cross-Variable Attention
+# ----------------------------
+class CrossVariableAttention(nn.Module):
+    def __init__(self, d_model, num_heads=4):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=num_heads, batch_first=True)
 
+    def forward(self, x):
+        # x: [B, L, N] -> treat N as tokens
+        x_perm = x.permute(0, 2, 1)  # B N L
+        attn_out, _ = self.attn(x_perm, x_perm, x_perm)
+        return attn_out.permute(0, 2, 1)  # B L N
+
+# ----------------------------
+# MSM Model
+# ----------------------------
 class Model(nn.Module):
     def __init__(self, configs):
         super().__init__()
@@ -32,15 +43,31 @@ class Model(nn.Module):
         self.pred_len = configs.pred_len
         self.use_norm = configs.use_norm
 
+        # Embedding
         self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model,
                                                     configs.embed, configs.freq, configs.dropout)
 
-        self.encoder = Encoder([...])  # keep your existing encoder layers
+        # Encoder layers
+        self.encoder = Encoder(
+            [
+                EncoderLayer(
+                    Mamba(d_model=configs.d_model, d_state=configs.d_state, d_conv=2, expand=1),
+                    Mamba(d_model=configs.d_model, d_state=configs.d_state, d_conv=2, expand=1),
+                    configs.d_model,
+                    configs.d_ff,
+                    dropout=configs.dropout,
+                    activation=configs.activation
+                )
+                for _ in range(configs.e_layers)
+            ],
+            norm_layer=torch.nn.LayerNorm(configs.d_model)
+        )
+
         self.projector = nn.Linear(configs.d_model, configs.pred_len, bias=True)
 
-        # NEW blocks
-        self.decomp = series_decomp(kernel_size=25)
-        self.cross_att = CrossVariableAttention(d_model=configs.d_model)
+        # New Blocks
+        self.decomp = SeriesDecomp(kernel_size=25)
+        self.cross_att = CrossVariableAttention(d_model=configs.d_model, num_heads=4)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         if self.use_norm:
@@ -50,22 +77,31 @@ class Model(nn.Module):
             x_enc /= stdev
 
         # Embedding
-        enc_out = self.enc_embedding(x_enc, x_mark_enc)
+        enc_out = self.enc_embedding(x_enc, x_mark_enc)  # B L N -> B L D
 
+        # ----------------------------
         # Decompose
-        trend, residual = self.decomp(enc_out)  # [B, L, N]
+        # ----------------------------
+        trend, residual = self.decomp(enc_out)  # B L N
 
-        # Optional: SSM or encoder processing separately
+        # ----------------------------
+        # Encoder Processing
+        # ----------------------------
         trend, _ = self.encoder(trend)
         residual, _ = self.encoder(residual)
 
-        # Cross-variable attention
+        # ----------------------------
+        # Cross-Variable Attention
+        # ----------------------------
         trend_att = self.cross_att(trend)
-        res_att = self.cross_att(residual)
-        enc_out = trend_att + res_att
+        residual_att = self.cross_att(residual)
 
-        # Projection
-        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :x_enc.shape[2]]
+        enc_out = trend_att + residual_att  # combine components
+
+        # ----------------------------
+        # Projection to prediction length
+        # ----------------------------
+        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :x_enc.shape[2]]  # B S N
 
         if self.use_norm:
             dec_out = dec_out * stdev[:, 0, :].unsqueeze(1)
@@ -75,10 +111,4 @@ class Model(nn.Module):
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-        return dec_out[:, -self.pred_len:, :]
-
-
-
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-        return dec_out[:, -self.pred_len:, :]  # [B, L, D]
+        return dec_out[:, -self.pred_len:, :]  # [B, L, N]
