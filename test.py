@@ -12,7 +12,7 @@ from model.S_Mamba import Model
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_PATH = "/home/nkaraoul/timesfm_backup/mult_sin_d1_full.csv"
+CSV_PATH = "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv"
 SEQ_LEN = 128
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
