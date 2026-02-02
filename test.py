@@ -192,7 +192,7 @@ if __name__ == "__main__":
         freq = "h"
         dropout = 0.1
         d_state = 2
-
+        activation = "gelu"
     configs = Config()
     model = Model(configs).to(device)
 
