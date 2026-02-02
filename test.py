@@ -16,9 +16,9 @@ CSV_PATH = "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv"
 SEQ_LEN = 128
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 EPOCHS = 10
-LR = 5e-5
+LR = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 SAVE_DIR = "./results"
