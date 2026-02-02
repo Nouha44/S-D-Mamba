@@ -152,17 +152,17 @@ def forecast_and_plot(model, data_loader, scaler, device, seq_len, pred_len, sav
             dec_inp = torch.zeros_like(Y).to(device)
             pred = model(X, None, dec_inp, None)[:, :, -Y.shape[2]:]
 
-            # Correct: permute back to [time, features] without squeeze
+            # [features, time] -> [time, features] for scaler
             context = X[0].permute(1,0).cpu().numpy()  # [seq_len, features]
             true_future = Y[0].permute(1,0).cpu().numpy()  # [pred_len, features]
             forecast = pred[0].permute(1,0).cpu().numpy()  # [pred_len, features]
 
-            # Inverse scaling
-            context = scaler.inverse_transform(context)
+            # inverse scale
+            context = scaler.inverse_transform(context)  # [seq_len, features]
             true_future = scaler.inverse_transform(true_future)
             forecast = scaler.inverse_transform(forecast)
 
-            # Plot only first feature for simplicity
+            # Plot only the first feature
             plt.plot(range(seq_len), context[:, 0], color="green", label="Context")
             plt.plot(range(seq_len, seq_len+pred_len), true_future[:, 0], color="gold", label="Ground Truth")
             plt.plot(range(seq_len, seq_len+pred_len), forecast[:, 0], color="red", label="Forecast")
@@ -175,6 +175,7 @@ def forecast_and_plot(model, data_loader, scaler, device, seq_len, pred_len, sav
     plt.grid(True)
     plt.savefig(save_path)
     plt.show()
+
 
 
 # ------------------------------
