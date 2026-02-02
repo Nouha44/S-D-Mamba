@@ -183,6 +183,36 @@ plt.xlabel("Time step")
 plt.ylabel("Value")
 plt.legend()
 plt.grid(True)
+def evaluate_rmse(model, loader, device):
+    model.eval()
+    all_preds = []
+    all_trues = []
+
+    with torch.no_grad():
+        for x, x_mark, y, y_mark in loader:
+            x, x_mark = x.to(device), x_mark.to(device)
+            y, y_mark = y.to(device), y_mark.to(device)
+
+            dec_inp = torch.cat(
+                [y[:, :LABEL_LEN, :],
+                 torch.zeros_like(y[:, LABEL_LEN:, :])],
+                dim=1
+            )
+
+            preds = model(x, x_mark, dec_inp, y_mark)
+            preds = preds[:, -PRED_LEN:, :]
+
+            all_preds.append(preds.cpu().numpy())
+            all_trues.append(y.cpu().numpy())
+
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_trues = np.concatenate(all_trues, axis=0)
+    mse = np.mean((all_preds - all_trues) ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
+
+test_rmse = evaluate_rmse(model, test_loader, DEVICE)
+print(f"📊 Test RMSE (raw values): {test_rmse:.6f}")
 
 plt.savefig(f"{SAVE_DIR}/weather_forecast.png", dpi=200)
 plt.show()
