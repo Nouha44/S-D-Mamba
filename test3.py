@@ -85,7 +85,7 @@ class Config:
     use_norm = True
     class_strategy = "projection"
 
-model = Model(Config(), num_vars=num_vars).to(DEVICE)
+model = Model(Config(), num_vars=1).to(DEVICE)
 
 # =====================================================
 # TRAINING LOOP
