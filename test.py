@@ -122,48 +122,46 @@ def train_model(model, train_loader, val_loader, device, lr=1e-4, epochs=50, pat
 # ------------------------------
 # 4. Forecasting and visualization
 # ------------------------------
-def forecast_and_plot(model, data_loader, scaler, device, pred_len, save_path="forecast.png"):
+def forecast_and_plot(model, data_loader, scaler, device, context_len, pred_len, save_path="forecast.png"):
     model.eval()
-    preds, trues = [], []
+    plt.figure(figsize=(15,5))
+
     with torch.no_grad():
-        for X_batch, Y_batch in data_loader:
-            X_batch = X_batch.float().permute(0, 2, 1).to(device)  # [B, N, L]
-            Y_batch = Y_batch.float().permute(0, 2, 1).to(device)  # [B, N, L]
-            dec_inp = torch.zeros_like(Y_batch).to(device)
-            output = model(X_batch, None, dec_inp, None)
-            output = output[:, :, -pred_len:]  # [B, N, pred_len]
-            preds.append(output.cpu().numpy())
-            trues.append(Y_batch[:, :, -pred_len:].cpu().numpy())
+        for i, (X_batch, Y_batch) in enumerate(data_loader):
+            # On ne prend que le premier batch et la première série pour la visualisation
+            X = X_batch[0].float().permute(1,0).unsqueeze(0).to(device)  # [1, N, L]
+            Y = Y_batch[0].float().permute(1,0).unsqueeze(0).to(device)  # [1, N, L]
 
-    preds = np.concatenate(preds, axis=0)  # [total_batches, N, pred_len]
-    trues = np.concatenate(trues, axis=0)
+            dec_inp = torch.zeros_like(Y).to(device)
+            pred = model(X, None, dec_inp, None)[:, :, -pred_len:]  # [1, N, pred_len]
 
-    # transpose to [samples, features] for scaler
-    preds = preds.transpose(0, 2, 1).reshape(-1, preds.shape[1])
-    trues = trues.transpose(0, 2, 1).reshape(-1, trues.shape[1])
+            # Transpose pour avoir [time, features] et inverse scale
+            context = X.cpu().numpy().squeeze(-1).T  # [context_len, 1]
+            true_future = Y.cpu().numpy().squeeze(-1).T  # [pred_len, 1]
+            forecast = pred.cpu().numpy().squeeze(-1).T  # [pred_len, 1]
 
-    # Inverse scaling
-    preds = scaler.inverse_transform(preds)
-    trues = scaler.inverse_transform(trues)
+            # Inverse scaling
+            context = scaler.inverse_transform(context)
+            true_future = scaler.inverse_transform(true_future)
+            forecast = scaler.inverse_transform(forecast)
 
-    # If univariate, flatten to 1D
-    if preds.shape[1] == 1:
-        preds = preds.flatten()
-        trues = trues.flatten()
+            # Plot
+            plt.plot(range(context_len), context, color="green", label="Context" if i==0 else "")
+            plt.plot(range(context_len, context_len+pred_len), true_future, color="gold", label="Ground Truth" if i==0 else "")
+            plt.plot(range(context_len, context_len+pred_len), forecast, color="red", label="Forecast" if i==0 else "")
 
-    # Metrics
-    mse = mean_squared_error(trues, preds)
-    mae = mean_absolute_error(trues, preds)
-    print(f"Test MSE: {mse:.6f} | MAE: {mae:.6f}")
+            # On fait juste le premier batch
+            break
 
-    # Plot
-    plt.figure(figsize=(12,5))
-    plt.plot(trues, label="Ground Truth")
-    plt.plot(preds, label="Forecast")
-    plt.title("Forecast vs Ground Truth")
+    plt.xlabel("Time step")
+    plt.ylabel("Value")
+    plt.title("Forecast vs Ground Truth with Context Window")
     plt.legend()
+    plt.grid(True)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path)
     plt.show()
+
 
 
 # ------------------------------
@@ -212,4 +210,4 @@ if __name__ == "__main__":
 
     # Forecast and plot
     os.makedirs("./results", exist_ok=True)
-    forecast_and_plot(model, test_loader, scaler, device, pred_len, save_path="./results/mamba_forecast.png")
+    forecast_and_plot(model, test_loader, scaler, device, context_len=context_len, pred_len=pred_len, save_path="./results/mamba_forecast_window.png")
