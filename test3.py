@@ -12,7 +12,7 @@ from model.MSM import Model  # your new MSM model
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_PATH = "./dataset/weather/weather.csv"
+CSV_PATH = "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv"
 SEQ_LEN = 128
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
