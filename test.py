@@ -127,20 +127,29 @@ def forecast_and_plot(model, data_loader, scaler, device, pred_len, save_path="f
     preds, trues = [], []
     with torch.no_grad():
         for X_batch, Y_batch in data_loader:
-            X_batch = X_batch.float().permute(0, 2, 1).to(device)
-            Y_batch = Y_batch.float().permute(0, 2, 1).to(device)
+            X_batch = X_batch.float().permute(0, 2, 1).to(device)  # [B, N, L]
+            Y_batch = Y_batch.float().permute(0, 2, 1).to(device)  # [B, N, L]
             dec_inp = torch.zeros_like(Y_batch).to(device)
             output = model(X_batch, None, dec_inp, None)
-            output = output[:, :, -pred_len:]
+            output = output[:, :, -pred_len:]  # [B, N, pred_len]
             preds.append(output.cpu().numpy())
             trues.append(Y_batch[:, :, -pred_len:].cpu().numpy())
 
-    preds = np.concatenate(preds, axis=0).squeeze(1)  # squeeze features if univariate
-    trues = np.concatenate(trues, axis=0).squeeze(1)
+    preds = np.concatenate(preds, axis=0)  # [total_batches, N, pred_len]
+    trues = np.concatenate(trues, axis=0)
+
+    # transpose to [samples, features] for scaler
+    preds = preds.transpose(0, 2, 1).reshape(-1, preds.shape[1])
+    trues = trues.transpose(0, 2, 1).reshape(-1, trues.shape[1])
 
     # Inverse scaling
     preds = scaler.inverse_transform(preds)
     trues = scaler.inverse_transform(trues)
+
+    # If univariate, flatten to 1D
+    if preds.shape[1] == 1:
+        preds = preds.flatten()
+        trues = trues.flatten()
 
     # Metrics
     mse = mean_squared_error(trues, preds)
@@ -155,6 +164,7 @@ def forecast_and_plot(model, data_loader, scaler, device, pred_len, save_path="f
     plt.legend()
     plt.savefig(save_path)
     plt.show()
+
 
 # ------------------------------
 # 5. Main
