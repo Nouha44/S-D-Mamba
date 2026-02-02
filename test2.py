@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 
-from model.MSM-SSM import Model
+from model.MSM import Model
 
 # =====================================================
 # CONFIG
