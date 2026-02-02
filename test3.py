@@ -7,12 +7,12 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 
-from model.MSM import Model  # your new MSM model
+from model.MSM import Model  # your updated MSM model
 
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_PATH = "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv"
+CSV_PATH = "./dataset/weather/weather.csv"
 SEQ_LEN = 128
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
@@ -39,7 +39,7 @@ class WeatherDataset(Dataset):
     def __getitem__(self, idx):
         x = self.data[idx: idx + self.seq_len]
         y = self.data[idx + self.seq_len: idx + self.seq_len + self.pred_len]
-        x_mark = torch.zeros_like(x)  # optional: future timestamps
+        x_mark = torch.zeros_like(x)  # placeholder for time features
         y_mark = torch.zeros_like(y)
         return x, x_mark, y, y_mark
 
@@ -48,6 +48,7 @@ class WeatherDataset(Dataset):
 # =====================================================
 df = pd.read_csv(CSV_PATH)
 values = df["values"].values.astype("float32").reshape(-1, 1)
+num_vars = values.shape[1]
 
 n = len(values)
 train_end = int(0.7 * n)
@@ -55,8 +56,8 @@ val_end = int(0.8 * n)
 
 scaler = StandardScaler()
 train_data = scaler.fit_transform(values[:train_end])
-val_data = scaler.transform(values[train_end:val_end])
-test_data = scaler.transform(values[val_end:])
+val_data   = scaler.transform(values[train_end:val_end])
+test_data  = scaler.transform(values[val_end:])
 
 train_ds = WeatherDataset(train_data, SEQ_LEN, PRED_LEN)
 val_ds   = WeatherDataset(val_data, SEQ_LEN, PRED_LEN)
@@ -84,10 +85,10 @@ class Config:
     use_norm = True
     class_strategy = "projection"
 
-model = Model(Config()).to(DEVICE)
+model = Model(Config(), num_vars=num_vars).to(DEVICE)
 
 # =====================================================
-# TRAINING
+# TRAINING LOOP
 # =====================================================
 criterion = nn.MSELoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
@@ -101,11 +102,12 @@ for epoch in range(EPOCHS):
         x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
         y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
 
-        # Create decoder input: use first half of label + zeros
+        # Decoder input: first half of true y + zeros
         dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
 
         optimizer.zero_grad()
-        preds = model(x, x_mark, dec_inp, y_mark)  # MSM handles decomposition & attention internally
+        preds = model(x, x_mark, dec_inp, y_mark)
+        preds = preds[:, -PRED_LEN:, :]
         loss = criterion(preds, y)
         loss.backward()
         optimizer.step()
@@ -120,18 +122,20 @@ for epoch in range(EPOCHS):
             y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
             dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
             preds = model(x, x_mark, dec_inp, y_mark)
+            preds = preds[:, -PRED_LEN:, :]
             val_loss += criterion(preds, y).item()
 
     train_loss /= len(train_loader)
     val_loss /= len(val_loader)
-    print(f"Epoch {epoch+1:02d} | Train {train_loss:.5f} | Val {val_loss:.5f}")
+    print(f"Epoch {epoch+1:02d} | Train {train_loss:.6f} | Val {val_loss:.6f}")
 
+    # Save best model
     if val_loss < best_val:
         best_val = val_loss
         torch.save(model.state_dict(), os.path.join(SAVE_DIR, "best_msm_weather.pt"))
 
 # =====================================================
-# FORECAST + PLOT
+# FORECAST + RMSE
 # =====================================================
 model.load_state_dict(torch.load(os.path.join(SAVE_DIR, "best_msm_weather.pt")))
 model.eval()
@@ -146,22 +150,27 @@ def evaluate_rmse(model, loader, scaler, device):
             y, y_mark = y.to(device), y_mark.to(device)
             dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
             preds = model(x, x_mark, dec_inp, y_mark)
+            preds = preds[:, -PRED_LEN:, :]
 
-            # Inverse transform to real scale
+            # Inverse scaling
             preds_real = scaler.inverse_transform(preds.cpu().numpy().reshape(-1, 1))
             y_real = scaler.inverse_transform(y.cpu().numpy().reshape(-1, 1))
+
             all_preds.append(preds_real)
             all_trues.append(y_real)
 
     all_preds = np.concatenate(all_preds, axis=0)
     all_trues = np.concatenate(all_trues, axis=0)
     mse = np.mean((all_preds - all_trues) ** 2)
-    return np.sqrt(mse)
+    rmse = np.sqrt(mse)
+    return rmse
 
 test_rmse = evaluate_rmse(model, test_loader, scaler, DEVICE)
-print(f"📊 Test RMSE (after inverse scaling) : {test_rmse:.6f}")
+print(f"📊 Test RMSE (after inverse transform): {test_rmse:.6f}")
 
-# Plot first forecast
+# =====================================================
+# PLOT FIRST PREDICTION
+# =====================================================
 x, x_mark, y, y_mark = next(iter(test_loader))
 x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
 y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
@@ -169,6 +178,7 @@ dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])]
 
 with torch.no_grad():
     preds = model(x, x_mark, dec_inp, y_mark)
+    preds = preds[:, -PRED_LEN:, :]
 
 context = scaler.inverse_transform(x[0].cpu().numpy())
 true_future = scaler.inverse_transform(y[0].cpu().numpy())
@@ -183,7 +193,6 @@ plt.xlabel("Time step")
 plt.ylabel("Value")
 plt.legend()
 plt.grid(True)
-plt.savefig(f"{SAVE_DIR}/weather_forecast.png", dpi=200)
+plt.savefig(os.path.join(SAVE_DIR, "weather_forecast.png"), dpi=200)
 plt.show()
-
-print("✅ Forecast plot saved to results/weather_forecast.png")
+print(f"✅ Forecast plot saved to {SAVE_DIR}/weather_forecast.png")
