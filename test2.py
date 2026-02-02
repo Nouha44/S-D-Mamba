@@ -6,20 +6,18 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 
-from model.S_Mamba import Model
+from model.S_Mamba import Model  # Assure-toi que le path est correct
 
 # =====================================================
 # CONFIG
 # =====================================================
 CSV_PATH = "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv"
-
 SEQ_LEN = 128
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
-
 BATCH_SIZE = 64
 EPOCHS = 10
-LR = 5e-5                     # ↓ plus stable sans normalisation
+LR = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 SAVE_DIR = "./results"
@@ -38,23 +36,21 @@ class WeatherDataset(Dataset):
         return len(self.data) - self.seq_len - self.pred_len + 1
 
     def __getitem__(self, idx):
-        x = self.data[idx : idx + self.seq_len]
-        y = self.data[idx + self.seq_len : idx + self.seq_len + self.pred_len]
+        x = self.data[idx: idx + self.seq_len]
+        y = self.data[idx + self.seq_len: idx + self.seq_len + self.pred_len]
         x_mark = torch.zeros_like(x)
         y_mark = torch.zeros_like(y)
         return x, x_mark, y, y_mark
 
 # =====================================================
-# LOAD + SPLIT (NO NORMALIZATION)
+# LOAD + SPLIT (NO SCALING)
 # =====================================================
 df = pd.read_csv(CSV_PATH)
-
-# univarié
 values = df["values"].values.astype("float32").reshape(-1, 1)
 
 n = len(values)
 train_end = int(0.7 * n)
-val_end   = int(0.8 * n)
+val_end = int(0.8 * n)
 
 train_data = values[:train_end]
 val_data   = values[train_end:val_end]
@@ -97,7 +93,7 @@ best_val = float("inf")
 
 for epoch in range(EPOCHS):
     model.train()
-    train_loss = 0.0
+    train_loss = 0
 
     for x, x_mark, y, y_mark in train_loader:
         x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
@@ -115,15 +111,11 @@ for epoch in range(EPOCHS):
 
         loss = criterion(preds, y)
         loss.backward()
-
-        # 🔒 stabilisation gradients
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
         optimizer.step()
         train_loss += loss.item()
 
     model.eval()
-    val_loss = 0.0
+    val_loss = 0
     with torch.no_grad():
         for x, x_mark, y, y_mark in val_loader:
             x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
@@ -140,18 +132,17 @@ for epoch in range(EPOCHS):
             val_loss += criterion(preds, y).item()
 
     train_loss /= len(train_loader)
-    val_loss   /= len(val_loader)
-
-    print(f"Epoch {epoch+1:02d} | Train {train_loss:.5f} | Val {val_loss:.5f}")
+    val_loss /= len(val_loader)
+    print(f"Epoch {epoch+1:02d} | Train {train_loss:.6f} | Val {val_loss:.6f}")
 
     if val_loss < best_val:
         best_val = val_loss
-        torch.save(model.state_dict(), "best_s_mamba.pt")
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "best_s_mamba_weather.pt"))
 
 # =====================================================
 # FORECAST + PLOT
 # =====================================================
-model.load_state_dict(torch.load("best_s_mamba.pt"))
+model.load_state_dict(torch.load(os.path.join(SAVE_DIR, "best_s_mamba_weather.pt")))
 model.eval()
 
 x, x_mark, y, y_mark = next(iter(test_loader))
@@ -168,29 +159,56 @@ with torch.no_grad():
     preds = model(x, x_mark, dec_inp, y_mark)
     preds = preds[:, -PRED_LEN:, :]
 
-# premier sample
+# Take first sample for plotting
 context = x[0].cpu().numpy()
 true_future = y[0].cpu().numpy()
 forecast = preds[0].cpu().numpy()
 
-# =====================================================
-# PLOT
-# =====================================================
 plt.figure(figsize=(14, 5))
-
 plt.plot(range(SEQ_LEN), context[:, 0], label="Context", color="green")
-plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN),
-         true_future[:, 0], label="Ground Truth", color="gold")
-plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN),
-         forecast[:, 0], label="Forecast", color="red")
+plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN), true_future[:, 0], label="Ground Truth", color="gold")
+plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN), forecast[:, 0], label="Forecast", color="red")
 
-plt.title("S-Mamba Forecast (no normalization)")
+plt.title("S-Mamba Forecast (No Scaling)")
 plt.xlabel("Time step")
 plt.ylabel("Value")
 plt.legend()
 plt.grid(True)
-
-plt.savefig(f"{SAVE_DIR}/forecast_no_norm.png", dpi=200)
+plt.savefig(f"{SAVE_DIR}/weather_forecast.png", dpi=200)
 plt.show()
 
-print("✅ Forecast plot saved to results/forecast_no_norm.png")
+print("✅ Forecast plot saved to results/weather_forecast.png")
+
+# =====================================================
+# RMSE CALCULATION (TEST SET)
+# =====================================================
+def evaluate_rmse(model, loader, device):
+    model.eval()
+    all_preds = []
+    all_trues = []
+
+    with torch.no_grad():
+        for x, x_mark, y, y_mark in loader:
+            x, x_mark = x.to(device), x_mark.to(device)
+            y, y_mark = y.to(device), y_mark.to(device)
+
+            dec_inp = torch.cat(
+                [y[:, :LABEL_LEN, :],
+                 torch.zeros_like(y[:, LABEL_LEN:, :])],
+                dim=1
+            )
+
+            preds = model(x, x_mark, dec_inp, y_mark)
+            preds = preds[:, -PRED_LEN:, :]
+
+            all_preds.append(preds.cpu().numpy())
+            all_trues.append(y.cpu().numpy())
+
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_trues = np.concatenate(all_trues, axis=0)
+    mse = np.mean((all_preds - all_trues) ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
+
+test_rmse = evaluate_rmse(model, test_loader, DEVICE)
+print(f"📊 Test RMSE (raw values): {test_rmse:.6f}")
