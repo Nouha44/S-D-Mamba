@@ -1,3 +1,6 @@
+import torch
+import torch.nn as nn
+
 class SeriesDecomp(nn.Module):
     def __init__(self, kernel_size=25):
         super().__init__()
@@ -10,6 +13,7 @@ class SeriesDecomp(nn.Module):
         residual = x - trend
         return trend, residual
 
+
 class CrossVariableAttention(nn.Module):
     def __init__(self, d_model, num_heads=4):
         super().__init__()
@@ -20,3 +24,4 @@ class CrossVariableAttention(nn.Module):
         x_perm = x.permute(0, 2, 1)  # B N L
         attn_out, _ = self.attn(x_perm, x_perm, x_perm)
         return attn_out.permute(0, 2, 1)  # B L N
+# B L N
