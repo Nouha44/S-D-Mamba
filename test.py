@@ -13,8 +13,8 @@ from model.S_Mamba import Model
 # CONFIG
 # =====================================================
 CSV_PATH = "./dataset/weather/weather.csv"
-SEQ_LEN = 96
-PRED_LEN = 96
+SEQ_LEN = 128
+PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
 BATCH_SIZE = 32
 EPOCHS = 10
