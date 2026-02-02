@@ -3,7 +3,7 @@ import torch
 from model import Transformer, Informer, Reformer, Flowformer, Flashformer, \
     iTransformer, iInformer, iReformer, iFlowformer, iFlashformer, S_Mamba, \
     Flashformer_M, Flowformer_M, Autoformer, Autoformer_M, Transformer_M, \
-    Informer_M, Reformer_M
+    Informer_M, Reformer_M, MSM
 
 
 class Exp_Basic(object):
