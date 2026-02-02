@@ -28,7 +28,7 @@ def set_seed(seed=42):
 # 2. Dataset preparation
 # ------------------------------
 def prepare_datasets(series, context_len, pred_len, val_ratio=0.2, test_ratio=0.2, normalize=True):
-    series = series.reshape(-1, 1)
+    series = series.reshape(-1, 1)  # [time, features]
     n = len(series)
 
     train_end = int(n * (1 - val_ratio - test_ratio))
@@ -48,8 +48,8 @@ def prepare_datasets(series, context_len, pred_len, val_ratio=0.2, test_ratio=0.
     def create_windows(data):
         X, Y = [], []
         for i in range(len(data) - context_len - pred_len + 1):
-            X.append(data[i:i+context_len].T)
-            Y.append(data[i+context_len:i+context_len+pred_len].T)
+            X.append(data[i:i+context_len].T)  # [features, context_len]
+            Y.append(data[i+context_len:i+context_len+pred_len].T)  # [features, pred_len]
         return np.array(X), np.array(Y)
 
     return (
@@ -74,14 +74,16 @@ def train_model(model, train_loader, val_loader, device, lr=1e-4, epochs=50, pat
         model.train()
         train_losses = []
         for X_batch, Y_batch in train_loader:
-            X_batch = X_batch.float().to(device)
-            Y_batch = Y_batch.float().to(device)
+            # Permute to [B, N, L] for S_Mamba
+            X_batch = X_batch.float().permute(0, 2, 1).to(device)
+            Y_batch = Y_batch.float().permute(0, 2, 1).to(device)
+
             optimizer.zero_grad()
-            dec_inp = torch.zeros_like(Y_batch)
-            dec_inp = torch.cat([Y_batch[:, :model.seq_len, :], dec_inp], dim=1).float().to(device)
+            # decoder input: zeros with same shape as target
+            dec_inp = torch.zeros_like(Y_batch).to(device)
             output = model(X_batch, None, dec_inp, None)
-            output = output[:, -model.pred_len:, :]
-            loss = criterion(output, Y_batch[:, -model.pred_len:, :])
+            output = output[:, :, -model.pred_len:]  # [B, N, pred_len]
+            loss = criterion(output, Y_batch[:, :, -model.pred_len:])
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
@@ -91,13 +93,12 @@ def train_model(model, train_loader, val_loader, device, lr=1e-4, epochs=50, pat
         val_losses = []
         with torch.no_grad():
             for X_val, Y_val in val_loader:
-                X_val = X_val.float().to(device)
-                Y_val = Y_val.float().to(device)
-                dec_inp = torch.zeros_like(Y_val)
-                dec_inp = torch.cat([Y_val[:, :model.seq_len, :], dec_inp], dim=1).float().to(device)
+                X_val = X_val.float().permute(0, 2, 1).to(device)
+                Y_val = Y_val.float().permute(0, 2, 1).to(device)
+                dec_inp = torch.zeros_like(Y_val).to(device)
                 output = model(X_val, None, dec_inp, None)
-                output = output[:, -model.pred_len:, :]
-                loss = criterion(output, Y_val[:, -model.pred_len:, :])
+                output = output[:, :, -model.pred_len:]
+                loss = criterion(output, Y_val[:, :, -model.pred_len:])
                 val_losses.append(loss.item())
 
         val_loss = np.mean(val_losses)
@@ -126,17 +127,16 @@ def forecast_and_plot(model, data_loader, scaler, device, pred_len, save_path="f
     preds, trues = [], []
     with torch.no_grad():
         for X_batch, Y_batch in data_loader:
-            X_batch = X_batch.float().to(device)
-            Y_batch = Y_batch.float().to(device)
-            dec_inp = torch.zeros_like(Y_batch)
-            dec_inp = torch.cat([Y_batch[:, :model.seq_len, :], dec_inp], dim=1).float().to(device)
+            X_batch = X_batch.float().permute(0, 2, 1).to(device)
+            Y_batch = Y_batch.float().permute(0, 2, 1).to(device)
+            dec_inp = torch.zeros_like(Y_batch).to(device)
             output = model(X_batch, None, dec_inp, None)
-            output = output[:, -pred_len:, :]
+            output = output[:, :, -pred_len:]
             preds.append(output.cpu().numpy())
-            trues.append(Y_batch[:, -pred_len:, :].cpu().numpy())
+            trues.append(Y_batch[:, :, -pred_len:].cpu().numpy())
 
-    preds = np.concatenate(preds, axis=0).squeeze(-1)
-    trues = np.concatenate(trues, axis=0).squeeze(-1)
+    preds = np.concatenate(preds, axis=0).squeeze(1)  # squeeze features if univariate
+    trues = np.concatenate(trues, axis=0).squeeze(1)
 
     # Inverse scaling
     preds = scaler.inverse_transform(preds)
@@ -162,9 +162,9 @@ def forecast_and_plot(model, data_loader, scaler, device, pred_len, save_path="f
 if __name__ == "__main__":
     set_seed(42)
 
-    dataset_path = "./dataset/weather/weather.csv"  # adjust your dataset path
+    dataset_path = "./dataset/weather/weather.csv"
     df = pd.read_csv(dataset_path)
-    series = df["OT"].values  # adjust to your target column
+    series = df["OT"].values  # target column
 
     context_len = 96
     pred_len = 96
@@ -193,6 +193,7 @@ if __name__ == "__main__":
         dropout = 0.1
         d_state = 2
         activation = "gelu"
+
     configs = Config()
     model = Model(configs).to(device)
 
@@ -200,4 +201,5 @@ if __name__ == "__main__":
     model = train_model(model, train_loader, val_loader, device, lr=5e-5, epochs=5, patience=3)
 
     # Forecast and plot
+    os.makedirs("./results", exist_ok=True)
     forecast_and_plot(model, test_loader, scaler, device, pred_len, save_path="./results/mamba_forecast.png")
