@@ -8,9 +8,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-from model.S_Mamba import Model  # import your S_Mamba model here
+from model.S_Mamba import Model  # make sure your S_Mamba.py is correct
 
 # ------------------------------
 # 1. Seed
@@ -27,7 +26,12 @@ def set_seed(seed=42):
 # 2. Dataset preparation
 # ------------------------------
 def prepare_datasets(series, seq_len, label_len, pred_len, val_ratio=0.2, test_ratio=0.2, normalize=True):
-    series = series.reshape(-1, series.shape[1])  # [time, features]
+    """
+    series: [time, features]
+    Returns: (X_train,Y_train), (X_val,Y_val), (X_test,Y_test), scaler
+    All windows: [samples, features, seq_len/pred_len]
+    """
+    series = series.astype(np.float32)
     n = len(series)
 
     train_end = int(n * (1 - val_ratio - test_ratio))
@@ -47,8 +51,10 @@ def prepare_datasets(series, seq_len, label_len, pred_len, val_ratio=0.2, test_r
     def create_windows(data):
         X, Y = [], []
         for i in range(len(data) - seq_len - pred_len + 1):
-            X.append(data[i:i+seq_len].T)  # [features, seq_len]
-            Y.append(data[i+seq_len:i+seq_len+pred_len].T)  # [features, pred_len]
+            x_win = data[i:i+seq_len].T  # [features, seq_len]
+            y_win = data[i+seq_len:i+seq_len+pred_len].T  # [features, pred_len]
+            X.append(x_win)
+            Y.append(y_win)
         return np.array(X), np.array(Y)
 
     return (
@@ -84,29 +90,31 @@ class EarlyStopping:
 # ------------------------------
 # 4. Training function
 # ------------------------------
-def train_model(model, train_loader, val_loader, device, lr=1e-4, epochs=50, patience=5):
+def train_model(model, train_loader, val_loader, device, lr=5e-5, epochs=50, patience=5, checkpoint_path="./checkpoints/weather"):
+    os.makedirs(checkpoint_path, exist_ok=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
     early_stopping = EarlyStopping(patience=patience, verbose=True)
-    best_state = None
 
     for epoch in range(epochs):
         model.train()
         train_losses = []
-        time_start = time.time()
+        t0 = time.time()
         for X_batch, Y_batch in train_loader:
-            X_batch = X_batch.float().permute(0, 2, 1).to(device)  # [B, N, L]
-            Y_batch = Y_batch.float().permute(0, 2, 1).to(device)
+            X_batch = X_batch.float().to(device)  # [B, features, seq_len]
+            Y_batch = Y_batch.float().to(device)  # [B, features, pred_len]
 
             optimizer.zero_grad()
-            # decoder input: label_len past + zeros for pred_len
+
             label_len = min(48, Y_batch.shape[2])
             dec_inp = torch.cat([Y_batch[:, :, :label_len],
                                  torch.zeros(Y_batch.shape[0], Y_batch.shape[1], Y_batch.shape[2]-label_len).to(device)],
                                 dim=2)
-            output = model(X_batch, None, dec_inp, None)
-            output = output[:, :, -Y_batch.shape[2]:]
-            loss = criterion(output, Y_batch)
+
+            output = model(X_batch.unsqueeze(0), None, dec_inp.unsqueeze(0), None)  # [1,B,features,pred_len] ?
+            output = output[:, :, :, -Y_batch.shape[2]:]  # ensure only pred_len
+
+            loss = criterion(output.squeeze(0), Y_batch)
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
@@ -116,24 +124,23 @@ def train_model(model, train_loader, val_loader, device, lr=1e-4, epochs=50, pat
         val_losses = []
         with torch.no_grad():
             for X_val, Y_val in val_loader:
-                X_val = X_val.float().permute(0, 2, 1).to(device)
-                Y_val = Y_val.float().permute(0, 2, 1).to(device)
+                X_val = X_val.float().to(device)
+                Y_val = Y_val.float().to(device)
                 dec_inp = torch.cat([Y_val[:, :, :label_len],
                                      torch.zeros(Y_val.shape[0], Y_val.shape[1], Y_val.shape[2]-label_len).to(device)],
                                     dim=2)
-                output = model(X_val, None, dec_inp, None)[:, :, -Y_val.shape[2]:]
-                val_losses.append(criterion(output, Y_val).item())
+                output = model(X_val.unsqueeze(0), None, dec_inp.unsqueeze(0), None)[:, :, :, -Y_val.shape[2]:]
+                val_losses.append(criterion(output.squeeze(0), Y_val).item())
 
         val_loss = np.mean(val_losses)
-        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {np.mean(train_losses):.6f} | Val Loss: {val_loss:.6f} | Time: {time.time()-time_start:.1f}s")
-
-        early_stopping(val_loss, model, "./checkpoints/weather")
+        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {np.mean(train_losses):.6f} | Val Loss: {val_loss:.6f} | Time: {time.time()-t0:.1f}s")
+        early_stopping(val_loss, model, checkpoint_path)
         if early_stopping.early_stop:
             print("⏹ Early stopping")
             break
 
     # Load best model
-    model.load_state_dict(torch.load("./checkpoints/weather/checkpoint.pth"))
+    model.load_state_dict(torch.load(os.path.join(checkpoint_path, 'checkpoint.pth')))
     return model
 
 # ------------------------------
@@ -146,26 +153,25 @@ def forecast_and_plot(model, data_loader, scaler, device, seq_len, pred_len, sav
 
     with torch.no_grad():
         for X_batch, Y_batch in data_loader:
-            X = X_batch[0].float().permute(1,0).unsqueeze(0).to(device)  # [1, features, seq_len]
-            Y = Y_batch[0].float().permute(1,0).unsqueeze(0).to(device)  # [1, features, pred_len]
+            X = X_batch[0].float().to(device)  # [features, seq_len]
+            Y = Y_batch[0].float().to(device)  # [features, pred_len]
 
             dec_inp = torch.zeros_like(Y).to(device)
-            pred = model(X, None, dec_inp, None)[:, :, -Y.shape[2]:]
+            pred = model(X.unsqueeze(0), None, dec_inp.unsqueeze(0), None)[:, :, :, -Y.shape[1]:]
 
-            # [features, time] -> [time, features] for scaler
-            context = X[0].permute(1,0).cpu().numpy()  # [seq_len, features]
-            true_future = Y[0].permute(1,0).cpu().numpy()  # [pred_len, features]
-            forecast = pred[0].permute(1,0).cpu().numpy()  # [pred_len, features]
+            # convert to [time, features] for scaler
+            context = X.cpu().numpy().T
+            true_future = Y.cpu().numpy().T
+            forecast = pred[0].cpu().numpy().T
 
-            # inverse scale
-            context = scaler.inverse_transform(context)  # [seq_len, features]
+            context = scaler.inverse_transform(context)
             true_future = scaler.inverse_transform(true_future)
             forecast = scaler.inverse_transform(forecast)
 
-            # Plot only the first feature
-            plt.plot(range(seq_len), context[:, 0], color="green", label="Context")
-            plt.plot(range(seq_len, seq_len+pred_len), true_future[:, 0], color="gold", label="Ground Truth")
-            plt.plot(range(seq_len, seq_len+pred_len), forecast[:, 0], color="red", label="Forecast")
+            # Plot first feature
+            plt.plot(range(seq_len), context[:,0], color="green", label="Context")
+            plt.plot(range(seq_len, seq_len+pred_len), true_future[:,0], color="gold", label="Ground Truth")
+            plt.plot(range(seq_len, seq_len+pred_len), forecast[:,0], color="red", label="Forecast")
             break
 
     plt.xlabel("Time step")
@@ -176,37 +182,30 @@ def forecast_and_plot(model, data_loader, scaler, device, seq_len, pred_len, sav
     plt.savefig(save_path)
     plt.show()
 
-
-
 # ------------------------------
 # 6. Main
 # ------------------------------
 if __name__ == "__main__":
     set_seed(42)
-
     dataset_path = "./dataset/weather/weather.csv"
     df = pd.read_csv(dataset_path)
-    series = df.values[:, 1:]  # assume first column is date/time, rest are features
+    series = df.values[:, 1:]  # skip date column
 
     seq_len = 96
     label_len = 48
     pred_len = 96
     batch_size = 32
 
-    (X_train, Y_train), (X_val, Y_val), (X_test, Y_test), scaler = prepare_datasets(
+    (X_train,Y_train), (X_val,Y_val), (X_test,Y_test), scaler = prepare_datasets(
         series, seq_len, label_len, pred_len
     )
 
-    train_loader = DataLoader(TensorDataset(torch.tensor(X_train), torch.tensor(Y_train)),
-                              batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(torch.tensor(X_val), torch.tensor(Y_val)),
-                            batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(TensorDataset(torch.tensor(X_test), torch.tensor(Y_test)),
-                             batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(TensorDataset(torch.tensor(X_train), torch.tensor(Y_train)), batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(TensorDataset(torch.tensor(X_val), torch.tensor(Y_val)), batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(TensorDataset(torch.tensor(X_test), torch.tensor(Y_test)), batch_size=batch_size, shuffle=False)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Create S_Mamba model
     class Config:
         seq_len = seq_len
         pred_len = pred_len
