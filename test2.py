@@ -5,8 +5,9 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import StandardScaler
 
-from model.S_Mamba import Model  # Assure-toi que le path est correct
+from model.S_Mamba import Model
 
 # =====================================================
 # CONFIG
@@ -43,7 +44,7 @@ class WeatherDataset(Dataset):
         return x, x_mark, y, y_mark
 
 # =====================================================
-# LOAD + SPLIT (NO SCALING)
+# LOAD + SPLIT + STANDARDIZE
 # =====================================================
 df = pd.read_csv(CSV_PATH)
 values = df["values"].values.astype("float32").reshape(-1, 1)
@@ -52,9 +53,10 @@ n = len(values)
 train_end = int(0.7 * n)
 val_end = int(0.8 * n)
 
-train_data = values[:train_end]
-val_data   = values[train_end:val_end]
-test_data  = values[val_end:]
+scaler = StandardScaler()
+train_data = scaler.fit_transform(values[:train_end])
+val_data   = scaler.transform(values[train_end:val_end])
+test_data  = scaler.transform(values[val_end:])
 
 train_ds = WeatherDataset(train_data, SEQ_LEN, PRED_LEN)
 val_ds   = WeatherDataset(val_data, SEQ_LEN, PRED_LEN)
@@ -65,7 +67,7 @@ val_loader   = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 test_loader  = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
 # =====================================================
-# MODEL
+# MODEL CONFIG
 # =====================================================
 class Config:
     seq_len = SEQ_LEN
@@ -99,16 +101,11 @@ for epoch in range(EPOCHS):
         x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
         y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
 
-        dec_inp = torch.cat(
-            [y[:, :LABEL_LEN, :],
-             torch.zeros_like(y[:, LABEL_LEN:, :])],
-            dim=1
-        )
+        dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
 
         optimizer.zero_grad()
         preds = model(x, x_mark, dec_inp, y_mark)
         preds = preds[:, -PRED_LEN:, :]
-
         loss = criterion(preds, y)
         loss.backward()
         optimizer.step()
@@ -120,69 +117,27 @@ for epoch in range(EPOCHS):
         for x, x_mark, y, y_mark in val_loader:
             x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
             y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
-
-            dec_inp = torch.cat(
-                [y[:, :LABEL_LEN, :],
-                 torch.zeros_like(y[:, LABEL_LEN:, :])],
-                dim=1
-            )
-
+            dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
             preds = model(x, x_mark, dec_inp, y_mark)
             preds = preds[:, -PRED_LEN:, :]
             val_loss += criterion(preds, y).item()
 
     train_loss /= len(train_loader)
     val_loss /= len(val_loader)
-    print(f"Epoch {epoch+1:02d} | Train {train_loss:.6f} | Val {val_loss:.6f}")
+    print(f"Epoch {epoch+1:02d} | Train {train_loss:.5f} | Val {val_loss:.5f}")
 
     if val_loss < best_val:
         best_val = val_loss
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "best_s_mamba_weather.pt"))
+        torch.save(model.state_dict(), "best_s_mamba_weather.pt")
 
 # =====================================================
 # FORECAST + PLOT
 # =====================================================
-model.load_state_dict(torch.load(os.path.join(SAVE_DIR, "best_s_mamba_weather.pt")))
+model.load_state_dict(torch.load("best_s_mamba_weather.pt"))
 model.eval()
 
-x, x_mark, y, y_mark = next(iter(test_loader))
-x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
-y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
-
-dec_inp = torch.cat(
-    [y[:, :LABEL_LEN, :],
-     torch.zeros_like(y[:, LABEL_LEN:, :])],
-    dim=1
-)
-
-with torch.no_grad():
-    preds = model(x, x_mark, dec_inp, y_mark)
-    preds = preds[:, -PRED_LEN:, :]
-
-# Take first sample for plotting
-context = x[0].cpu().numpy()
-true_future = y[0].cpu().numpy()
-forecast = preds[0].cpu().numpy()
-
-plt.figure(figsize=(14, 5))
-plt.plot(range(SEQ_LEN), context[:, 0], label="Context", color="green")
-plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN), true_future[:, 0], label="Ground Truth", color="gold")
-plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN), forecast[:, 0], label="Forecast", color="red")
-
-plt.title("S-Mamba Forecast (No Scaling)")
-plt.xlabel("Time step")
-plt.ylabel("Value")
-plt.legend()
-plt.grid(True)
-plt.savefig(f"{SAVE_DIR}/weather_forecast.png", dpi=200)
-plt.show()
-
-print("✅ Forecast plot saved to results/weather_forecast.png")
-
-# =====================================================
-# RMSE CALCULATION (TEST SET)
-# =====================================================
-def evaluate_rmse(model, loader, device):
+# Fonction pour calculer RMSE sur tout le test set après déstandardization
+def evaluate_rmse(model, loader, scaler, device):
     model.eval()
     all_preds = []
     all_trues = []
@@ -192,17 +147,16 @@ def evaluate_rmse(model, loader, device):
             x, x_mark = x.to(device), x_mark.to(device)
             y, y_mark = y.to(device), y_mark.to(device)
 
-            dec_inp = torch.cat(
-                [y[:, :LABEL_LEN, :],
-                 torch.zeros_like(y[:, LABEL_LEN:, :])],
-                dim=1
-            )
-
+            dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
             preds = model(x, x_mark, dec_inp, y_mark)
             preds = preds[:, -PRED_LEN:, :]
 
-            all_preds.append(preds.cpu().numpy())
-            all_trues.append(y.cpu().numpy())
+            # Conversion en valeurs réelles
+            preds_real = scaler.inverse_transform(preds.cpu().numpy().reshape(-1, 1))
+            y_real = scaler.inverse_transform(y.cpu().numpy().reshape(-1, 1))
+
+            all_preds.append(preds_real)
+            all_trues.append(y_real)
 
     all_preds = np.concatenate(all_preds, axis=0)
     all_trues = np.concatenate(all_trues, axis=0)
@@ -210,5 +164,33 @@ def evaluate_rmse(model, loader, device):
     rmse = np.sqrt(mse)
     return rmse
 
-test_rmse = evaluate_rmse(model, test_loader, DEVICE)
-print(f"📊 Test RMSE (raw values): {test_rmse:.6f}")
+test_rmse = evaluate_rmse(model, test_loader, scaler, DEVICE)
+print(f"📊 Test RMSE (après déstandardisation) : {test_rmse:.6f}")
+
+# Plot première prédiction
+x, x_mark, y, y_mark = next(iter(test_loader))
+x, x_mark = x.to(DEVICE), x_mark.to(DEVICE)
+y, y_mark = y.to(DEVICE), y_mark.to(DEVICE)
+dec_inp = torch.cat([y[:, :LABEL_LEN, :], torch.zeros_like(y[:, LABEL_LEN:, :])], dim=1)
+
+with torch.no_grad():
+    preds = model(x, x_mark, dec_inp, y_mark)
+    preds = preds[:, -PRED_LEN:, :]
+
+context = scaler.inverse_transform(x[0].cpu().numpy())
+true_future = scaler.inverse_transform(y[0].cpu().numpy())
+forecast = scaler.inverse_transform(preds[0].cpu().numpy())
+
+plt.figure(figsize=(14, 5))
+plt.plot(range(SEQ_LEN), context[:, 0], label="Context", color="green")
+plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN), true_future[:, 0], label="Ground Truth", color="gold")
+plt.plot(range(SEQ_LEN, SEQ_LEN + PRED_LEN), forecast[:, 0], label="Forecast", color="red")
+plt.title("S-Mamba Weather Forecast")
+plt.xlabel("Time step")
+plt.ylabel("Value")
+plt.legend()
+plt.grid(True)
+plt.savefig(f"{SAVE_DIR}/weather_forecast.png", dpi=200)
+plt.show()
+
+print("✅ Forecast plot saved to results/weather_forecast.png")
