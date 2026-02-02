@@ -146,20 +146,26 @@ def forecast_and_plot(model, data_loader, scaler, device, seq_len, pred_len, sav
 
     with torch.no_grad():
         for X_batch, Y_batch in data_loader:
-            X = X_batch[0].float().permute(1,0).unsqueeze(0).to(device)
-            Y = Y_batch[0].float().permute(1,0).unsqueeze(0).to(device)
+            X = X_batch[0].float().permute(1,0).unsqueeze(0).to(device)  # [1, features, seq_len]
+            Y = Y_batch[0].float().permute(1,0).unsqueeze(0).to(device)  # [1, features, pred_len]
 
             dec_inp = torch.zeros_like(Y).to(device)
             pred = model(X, None, dec_inp, None)[:, :, -Y.shape[2]:]
 
-            # inverse scale
-            context = scaler.inverse_transform(X.cpu().numpy().squeeze(-1).T)
-            true_future = scaler.inverse_transform(Y.cpu().numpy().squeeze(-1).T)
-            forecast = scaler.inverse_transform(pred.cpu().numpy().squeeze(-1).T)
+            # Correct: permute back to [time, features] without squeeze
+            context = X[0].permute(1,0).cpu().numpy()  # [seq_len, features]
+            true_future = Y[0].permute(1,0).cpu().numpy()  # [pred_len, features]
+            forecast = pred[0].permute(1,0).cpu().numpy()  # [pred_len, features]
 
-            plt.plot(range(seq_len), context, color="green", label="Context")
-            plt.plot(range(seq_len, seq_len+pred_len), true_future, color="gold", label="Ground Truth")
-            plt.plot(range(seq_len, seq_len+pred_len), forecast, color="red", label="Forecast")
+            # Inverse scaling
+            context = scaler.inverse_transform(context)
+            true_future = scaler.inverse_transform(true_future)
+            forecast = scaler.inverse_transform(forecast)
+
+            # Plot only first feature for simplicity
+            plt.plot(range(seq_len), context[:, 0], color="green", label="Context")
+            plt.plot(range(seq_len, seq_len+pred_len), true_future[:, 0], color="gold", label="Ground Truth")
+            plt.plot(range(seq_len, seq_len+pred_len), forecast[:, 0], color="red", label="Forecast")
             break
 
     plt.xlabel("Time step")
@@ -169,6 +175,7 @@ def forecast_and_plot(model, data_loader, scaler, device, seq_len, pred_len, sav
     plt.grid(True)
     plt.savefig(save_path)
     plt.show()
+
 
 # ------------------------------
 # 6. Main
