@@ -139,7 +139,7 @@ def main():
         criterion=criterion,
         device=DEVICE,
         replay_buffer_size=3000,
-        alpha=1.0,
+        alpha=2.0,
         replay_mode="logits"
     )
 
