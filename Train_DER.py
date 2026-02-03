@@ -47,7 +47,7 @@ def plot_forecast(history, y_true, y_pred, seq_len, pred_len, title, save_dir="p
     plt.close()
 
 # ----------------------- DATASET -----------------------
-SEQ_LEN = 128
+SEQ_LEN = 256
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
 BATCH_SIZE = 64
