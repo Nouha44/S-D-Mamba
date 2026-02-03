@@ -138,9 +138,9 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        replay_buffer_size=3000,
-        alpha=2.0,
-        replay_mode="logits"
+        replay_buffer_size=1500,
+        alpha=1.0,
+        replay_mode="labels"
     )
 
     # ----- RESULTS MATRIX -----
