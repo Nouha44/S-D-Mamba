@@ -138,7 +138,7 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        replay_buffer_size=500,
+        replay_buffer_size=1500,
         alpha=2.0,
         replay_mode="labels"
     )
