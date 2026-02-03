@@ -130,7 +130,7 @@ def main():
         class_strategy = "projection"
 
     model = Model(Config()).to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
 
     der = DERContinualSMamba(
@@ -139,8 +139,8 @@ def main():
         criterion=criterion,
         device=DEVICE,
         replay_buffer_size=1500,
-        alpha=2.0,
-        replay_mode="labels"
+        alpha=1.0,
+        replay_mode="logits"
     )
 
     # ----- RESULTS MATRIX -----
