@@ -47,10 +47,10 @@ def load_task(path):
 def main():
 
     tasks_paths = [
-        "mult_sin_d1_full.csv",
-        "mult_sin_d2_full.csv",
-        "mult_sin_d3_full.csv",
-        "mult_sin_d4_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d1_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d2_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d3_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv",
     ]
 
     train_loaders, test_loaders = [], []
