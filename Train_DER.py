@@ -51,7 +51,7 @@ SEQ_LEN = 256
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
 BATCH_SIZE = 64
-EPOCHS = 5
+EPOCHS = 10
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 class WeatherDataset(torch.utils.data.Dataset):
