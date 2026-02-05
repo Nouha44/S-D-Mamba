@@ -3,24 +3,14 @@ import numpy as np
 import random
 from torch import nn
 
-
 class DERContinualSMamba:
     """
-    Implémentation STRICTE de DER et DER++
-    pour S-Mamba (seq2seq)
+    Implémentation STRICTE de DER et DER++ pour S-Mamba (seq2seq)
     """
 
-    def __init__(
-        self,
-        model,
-        optimizer,
-        criterion,
-        device,
-        replay_buffer_size=500,
-        alpha=1.0,
-        beta=0.5,
-        replay_mode="labels",  # labels | logits | both
-    ):
+    def __init__(self, model, optimizer, criterion, device,
+                 replay_buffer_size=500, alpha=1.0, beta=0.5,
+                 replay_mode="labels"):  # labels | logits | both
         self.model = model
         self.optimizer = optimizer
         self.criterion = criterion
@@ -31,26 +21,22 @@ class DERContinualSMamba:
         self.beta = beta
         self.replay_mode = replay_mode
 
+        # buffer pour DER / DER++
         self.replay_buffer = []
 
-    # --------------------------------------------------
-    # Reservoir sampling (standard, correct)
-    # --------------------------------------------------
+    # ---------------- Reservoir sampling ----------------
     def reservoir_sampling(self, new_item):
         if self.replay_buffer_size == 0:
             return
         if len(self.replay_buffer) < self.replay_buffer_size:
             self.replay_buffer.append(new_item)
         else:
-            j = random.randint(0, len(self.replay_buffer))
-            if j < self.replay_buffer_size:
-                self.replay_buffer[j] = new_item
+            idx = random.randint(0, len(self.replay_buffer))
+            if idx < self.replay_buffer_size:
+                self.replay_buffer[idx] = new_item
 
-    # --------------------------------------------------
-    # Train one task
-    # --------------------------------------------------
+    # ---------------- Fit one task ----------------
     def fit_one_task(self, train_loader, label_len, pred_len, task_idx=0, epochs=5):
-
         self.model.train()
 
         for epoch in range(epochs):
@@ -62,7 +48,7 @@ class DERContinualSMamba:
                 y = y.to(self.device)
                 y_mark = y_mark.to(self.device)
 
-                # ---- decoder input (PART OF INPUT) ----
+                # ---- decoder input part of input ----
                 dec_inp = torch.cat(
                     [y[:, :label_len, :],
                      torch.zeros_like(y[:, label_len:, :])],
@@ -79,12 +65,12 @@ class DERContinualSMamba:
 
                 # ================= REPLAY =================
                 if task_idx > 0 and len(self.replay_buffer) > 0:
+                    batch_size = x.size(0)
                     replay_idx = np.random.choice(
                         len(self.replay_buffer),
-                        min(len(self.replay_buffer), x.size(0)),
+                        min(len(self.replay_buffer), batch_size),
                         replace=False
                     )
-
                     samples = [self.replay_buffer[i] for i in replay_idx]
 
                     x_m = torch.stack([s["x"] for s in samples]).to(self.device)
@@ -98,11 +84,9 @@ class DERContinualSMamba:
                     if self.replay_mode == "labels":
                         y_true = torch.stack([s["y"] for s in samples]).to(self.device)
                         replay_loss = nn.functional.mse_loss(preds_now, y_true)
-
                     elif self.replay_mode == "logits":
                         old_logits = torch.stack([s["logits"] for s in samples]).to(self.device)
                         replay_loss = nn.functional.mse_loss(preds_now, old_logits)
-
                     elif self.replay_mode == "both":
                         y_true = torch.stack([s["y"] for s in samples]).to(self.device)
                         old_logits = torch.stack([s["logits"] for s in samples]).to(self.device)
@@ -113,6 +97,7 @@ class DERContinualSMamba:
                     else:
                         raise ValueError("Unknown replay_mode")
 
+                    # combine losses
                     loss = loss + self.alpha * replay_loss
                     replay_losses.append(replay_loss.item())
 
