@@ -4,10 +4,10 @@ import random
 from torch import nn
 
 
-class DERContinualSMamba2:
+class DERContinualSMamba:
     """
-    Dark Experience Replay (DER / DER++)
-    pour un modèle S-Mamba déjà défini
+    Implémentation STRICTE de DER et DER++
+    pour S-Mamba (seq2seq)
     """
 
     def __init__(
@@ -19,7 +19,7 @@ class DERContinualSMamba2:
         replay_buffer_size=500,
         alpha=1.0,
         beta=0.5,
-        replay_mode="labels"
+        replay_mode="labels",  # labels | logits | both
     ):
         self.model = model
         self.optimizer = optimizer
@@ -33,22 +33,22 @@ class DERContinualSMamba2:
 
         self.replay_buffer = []
 
-    # -----------------------
-    # Reservoir Sampling
-    # -----------------------
-    def reservoir_sampling(self, buffer, new_item):
+    # --------------------------------------------------
+    # Reservoir sampling (standard, correct)
+    # --------------------------------------------------
+    def reservoir_sampling(self, new_item):
         if self.replay_buffer_size == 0:
             return
-        if len(buffer) < self.replay_buffer_size:
-            buffer.append(new_item)
+        if len(self.replay_buffer) < self.replay_buffer_size:
+            self.replay_buffer.append(new_item)
         else:
-            idx = random.randint(0, len(buffer) - 1)
-            if idx < self.replay_buffer_size:
-                buffer[idx] = new_item
+            j = random.randint(0, len(self.replay_buffer))
+            if j < self.replay_buffer_size:
+                self.replay_buffer[j] = new_item
 
-    # -----------------------
-    # Entraînement 1 tâche
-    # -----------------------
+    # --------------------------------------------------
+    # Train one task
+    # --------------------------------------------------
     def fit_one_task(self, train_loader, label_len, pred_len, task_idx=0, epochs=5):
 
         self.model.train()
@@ -57,15 +57,19 @@ class DERContinualSMamba2:
             task_losses, replay_losses = [], []
 
             for x, x_mark, y, y_mark in train_loader:
-                x, x_mark = x.to(self.device), x_mark.to(self.device)
-                y, y_mark = y.to(self.device), y_mark.to(self.device)
+                x = x.to(self.device)
+                x_mark = x_mark.to(self.device)
+                y = y.to(self.device)
+                y_mark = y_mark.to(self.device)
 
+                # ---- decoder input (PART OF INPUT) ----
                 dec_inp = torch.cat(
-                    [y[:, :label_len, :], torch.zeros_like(y[:, label_len:, :])],
+                    [y[:, :label_len, :],
+                     torch.zeros_like(y[:, label_len:, :])],
                     dim=1
                 )
 
-                # -------- forward tâche courante --------
+                # ================= CURRENT TASK =================
                 preds = self.model(x, x_mark, dec_inp, y_mark)
                 preds = preds[:, -pred_len:, :]
                 loss = self.criterion(preds, y)
@@ -73,46 +77,64 @@ class DERContinualSMamba2:
 
                 preds_detached = preds.detach().cpu()
 
-                # -------- replay (UNIQUEMENT tâches futures) --------
+                # ================= REPLAY =================
                 if task_idx > 0 and len(self.replay_buffer) > 0:
-
-                    replay_idxs = np.random.choice(
+                    replay_idx = np.random.choice(
                         len(self.replay_buffer),
-                        min(len(self.replay_buffer), x.shape[0]),
+                        min(len(self.replay_buffer), x.size(0)),
                         replace=False
                     )
 
-                    replay_samples = [self.replay_buffer[i] for i in replay_idxs]
+                    samples = [self.replay_buffer[i] for i in replay_idx]
 
-                    x_mem = torch.stack([s[0] for s in replay_samples]).to(self.device)
-                    x_mark_mem = torch.stack([s[1] for s in replay_samples]).to(self.device)
-                    y_mem = torch.stack([s[2] for s in replay_samples]).to(self.device)
-                    y_mark_mem = torch.stack([s[3] for s in replay_samples]).to(self.device)
+                    x_m = torch.stack([s["x"] for s in samples]).to(self.device)
+                    x_mark_m = torch.stack([s["x_mark"] for s in samples]).to(self.device)
+                    dec_inp_m = torch.stack([s["dec_inp"] for s in samples]).to(self.device)
+                    y_mark_m = torch.stack([s["y_mark"] for s in samples]).to(self.device)
 
-                    dec_inp_mem = torch.cat(
-                        [y_mem[:, :label_len, :],
-                         torch.zeros_like(y_mem[:, label_len:, :])],
-                        dim=1
-                    )
+                    preds_now = self.model(x_m, x_mark_m, dec_inp_m, y_mark_m)
+                    preds_now = preds_now[:, -pred_len:, :]
 
-                    y_mem_now = self.model(x_mem, x_mark_mem, dec_inp_mem, y_mark_mem)
-                    y_mem_now = y_mem_now[:, -pred_len:, :]
+                    if self.replay_mode == "labels":
+                        y_true = torch.stack([s["y"] for s in samples]).to(self.device)
+                        replay_loss = nn.functional.mse_loss(preds_now, y_true)
 
-                    replay_loss = nn.functional.mse_loss(y_mem_now, y_mem)
+                    elif self.replay_mode == "logits":
+                        old_logits = torch.stack([s["logits"] for s in samples]).to(self.device)
+                        replay_loss = nn.functional.mse_loss(preds_now, old_logits)
+
+                    elif self.replay_mode == "both":
+                        y_true = torch.stack([s["y"] for s in samples]).to(self.device)
+                        old_logits = torch.stack([s["logits"] for s in samples]).to(self.device)
+                        replay_loss = (
+                            self.beta * nn.functional.mse_loss(preds_now, y_true) +
+                            (1 - self.beta) * nn.functional.mse_loss(preds_now, old_logits)
+                        )
+                    else:
+                        raise ValueError("Unknown replay_mode")
+
                     loss = loss + self.alpha * replay_loss
                     replay_losses.append(replay_loss.item())
 
-                # -------- backward --------
+                # ================= BACKWARD =================
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
-                # -------- stocker en mémoire (TOUTES les tâches) --------
-                for xb, xb_mark, yb, yb_mark in zip(
-                    x.cpu(), x_mark.cpu(), y.cpu(), y_mark.cpu()
+                # ================= STORE MEMORY =================
+                for xb, xb_m, yb, yb_m, dinp, logit in zip(
+                    x.cpu(), x_mark.cpu(), y.cpu(), y_mark.cpu(),
+                    dec_inp.cpu(), preds_detached
                 ):
-                    item = (xb, xb_mark, yb, yb_mark)
-                    self.reservoir_sampling(self.replay_buffer, item)
+                    item = {
+                        "x": xb,
+                        "x_mark": xb_m,
+                        "dec_inp": dinp,
+                        "y_mark": yb_m,
+                        "y": yb,
+                        "logits": logit,
+                    }
+                    self.reservoir_sampling(item)
 
             print(
                 f"Epoch {epoch+1}/{epochs} | "
