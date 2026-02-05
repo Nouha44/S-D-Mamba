@@ -113,7 +113,7 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        replay_buffer_size=0,
+        replay_buffer_size=1500,
         alpha=1.0,
         beta=1.0,
         replay_mode="logits"
