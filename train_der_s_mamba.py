@@ -5,7 +5,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from model.S_Mamba import Model
-from der_continual_s_mamba import DERContinualSMamba  # nouvelle version stricte
+from der_continual_s_mamba2 import DERContinualSMamba  # nouvelle version stricte
 
 
 # ---------------- CONFIG ----------------
