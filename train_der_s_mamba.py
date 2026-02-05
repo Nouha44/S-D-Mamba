@@ -118,7 +118,7 @@ def main():
         device=DEVICE,
         replay_buffer_size=0,
         alpha=1.0,
-        beta=0.5,  # DER++ mixing parameter
+        beta=None,  # DER++ mixing parameter
         replay_mode="logits"  # "labels", "logits" ou "both"
     )
 
