@@ -38,8 +38,10 @@ def load_task(path):
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
     split = int(0.8 * len(ds))
     return (
-        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True),
-        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE)
+        DataLoader(torch.utils.data.Subset(ds, range(split)),
+                   batch_size=BATCH_SIZE, shuffle=True),
+        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))),
+                   batch_size=BATCH_SIZE)
     )
 
 
@@ -85,11 +87,11 @@ def main():
         criterion=criterion,
         device=DEVICE,
         replay_buffer_size=500,
-        alpha=2.0,
-        replay_mode="labels"  # ou logits / both
+        alpha=1.0,
+        beta=1,
+        replay_mode="logits"  # labels | logits | both
     )
 
-    # ----- LOOP TASKS -----
     for t_idx, train_loader in enumerate(train_loaders):
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
         der.fit_one_task(
