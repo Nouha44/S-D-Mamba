@@ -5,7 +5,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from model.S_Mamba import Model
-from der_continual_s_mamba import DERContinualSMamba
+from der_continual_s_mamba import DERContinualSMamba  # nouvelle version stricte
 
 
 # ---------------- CONFIG ----------------
@@ -30,6 +30,7 @@ class WeatherDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         x = self.data[idx: idx + self.seq_len]
         y = self.data[idx + self.seq_len: idx + self.seq_len + self.pred_len]
+        # x_mark et y_mark remplis à 0 pour S-Mamba
         return x, torch.zeros_like(x), y, torch.zeros_like(y)
 
 
@@ -43,6 +44,9 @@ def load_task(path):
         DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))),
                    batch_size=BATCH_SIZE)
     )
+
+
+# ---------------- EVALUATION ----------------
 def evaluate_rmse(model, dataloader, label_len, pred_len, device):
     model.eval()
     mse_sum, n = 0.0, 0
@@ -69,10 +73,8 @@ def evaluate_rmse(model, dataloader, label_len, pred_len, device):
     return np.sqrt(mse_sum / n)
 
 
-
 # ---------------- MAIN ----------------
 def main():
-
     tasks_paths = [
         "/home/nkaraoul/timesfm_backup/mult_sin_d1_full.csv",
         "/home/nkaraoul/timesfm_backup/mult_sin_d2_full.csv",
@@ -108,6 +110,7 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     criterion = nn.MSELoss()
 
+    # ----- DER Continual Learning -----
     der = DERContinualSMamba(
         model=model,
         optimizer=optimizer,
@@ -115,8 +118,8 @@ def main():
         device=DEVICE,
         replay_buffer_size=1500,
         alpha=1.0,
-        beta=1.0,
-        replay_mode="logits"
+        beta=1.0,  # DER++ mixing parameter
+        replay_mode="logits"  # "labels", "logits" ou "both"
     )
 
     # ================= METRICS =================
@@ -171,7 +174,6 @@ def main():
 
     bwt = np.mean(bwt_values)
     print(f"📉 Backward Transfer (BWT): {bwt:.4f}")
-
 
 
 if __name__ == "__main__":
