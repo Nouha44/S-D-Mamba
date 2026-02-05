@@ -43,6 +43,31 @@ def load_task(path):
         DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))),
                    batch_size=BATCH_SIZE)
     )
+def evaluate_rmse(model, dataloader, label_len, pred_len, device):
+    model.eval()
+    mse_sum, n = 0.0, 0
+
+    with torch.no_grad():
+        for x, x_mark, y, y_mark in dataloader:
+            x = x.to(device)
+            x_mark = x_mark.to(device)
+            y = y.to(device)
+            y_mark = y_mark.to(device)
+
+            dec_inp = torch.cat(
+                [y[:, :label_len, :],
+                 torch.zeros_like(y[:, label_len:, :])],
+                dim=1
+            )
+
+            preds = model(x, x_mark, dec_inp, y_mark)
+            preds = preds[:, -pred_len:, :]
+
+            mse_sum += nn.functional.mse_loss(preds, y, reduction="sum").item()
+            n += y.numel()
+
+    return np.sqrt(mse_sum / n)
+
 
 
 # ---------------- MAIN ----------------
@@ -60,6 +85,8 @@ def main():
         tr, te = load_task(p)
         train_loaders.append(tr)
         test_loaders.append(te)
+
+    num_tasks = len(train_loaders)
 
     # ----- MODEL -----
     class Config:
@@ -88,12 +115,17 @@ def main():
         device=DEVICE,
         replay_buffer_size=500,
         alpha=1.0,
-        beta=1,
-        replay_mode="logits"  # labels | logits | both
+        beta=1.0,
+        replay_mode="logits"
     )
 
+    # ================= METRICS =================
+    results_matrix = np.full((num_tasks, num_tasks), np.nan)
+
+    # ================= TRAIN LOOP =================
     for t_idx, train_loader in enumerate(train_loaders):
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
+
         der.fit_one_task(
             train_loader,
             label_len=LABEL_LEN,
@@ -101,6 +133,45 @@ def main():
             task_idx=t_idx,
             epochs=EPOCHS
         )
+
+        # --------- EVALUATION ---------
+        for eval_idx in range(t_idx + 1):
+            rmse = evaluate_rmse(
+                model,
+                test_loaders[eval_idx],
+                LABEL_LEN,
+                PRED_LEN,
+                DEVICE
+            )
+            results_matrix[t_idx, eval_idx] = rmse
+            print(f"RMSE Task{eval_idx+1} after Task{t_idx+1}: {rmse:.4f}")
+
+    # ================= RESULTS =================
+    df = pd.DataFrame(
+        results_matrix,
+        columns=[f"Task{i+1}" for i in range(num_tasks)],
+        index=[f"after T{i+1}" for i in range(num_tasks)]
+    )
+
+    print("\n=== Global RMSE Results ===")
+    print(df)
+    df.to_csv("der_results.csv")
+
+    # ================= CONTINUAL METRICS =================
+    # Final Average RMSE
+    final_rmse = np.nanmean(results_matrix[-1])
+    print(f"\n📊 Final Average RMSE (after T{num_tasks}): {final_rmse:.4f}")
+
+    # Backward Transfer (BWT)
+    bwt_values = []
+    for task_id in range(num_tasks - 1):
+        perf_after_learned = results_matrix[task_id, task_id]
+        perf_after_final = results_matrix[-1, task_id]
+        bwt_values.append(perf_after_final - perf_after_learned)
+
+    bwt = np.mean(bwt_values)
+    print(f"📉 Backward Transfer (BWT): {bwt:.4f}")
+
 
 
 if __name__ == "__main__":
