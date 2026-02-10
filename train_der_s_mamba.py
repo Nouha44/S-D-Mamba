@@ -45,6 +45,13 @@ def load_task(path):
                    batch_size=BATCH_SIZE)
     )
 
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 # ---------------- EVALUATION ----------------
 def evaluate_rmse(model, dataloader, label_len, pred_len, device):
@@ -75,6 +82,7 @@ def evaluate_rmse(model, dataloader, label_len, pred_len, device):
 
 # ---------------- MAIN ----------------
 def main():
+    set_seed(42)
     tasks_paths = [
         "/home/nkaraoul/timesfm_backup/mult_sin_d1_full.csv",
         "/home/nkaraoul/timesfm_backup/mult_sin_d2_full.csv",
