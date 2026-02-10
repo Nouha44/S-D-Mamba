@@ -3,14 +3,17 @@ import numpy as np
 import random
 from torch import nn
 
+
 class DERContinualSMamba:
     """
-    Implémentation STRICTE de DER et DER++ pour S-Mamba (seq2seq)
+    Dark Experience Replay (DER / DER++) pour forecasting avec S-Mamba
+    Implémentation ALIGNÉE avec DERContinualSAMFormer
     """
 
     def __init__(self, model, optimizer, criterion, device,
                  replay_buffer_size=500, alpha=1.0, beta=0.5,
-                 replay_mode="labels"):  # labels | logits | both
+                 replay_mode="labels"):
+
         self.model = model
         self.optimizer = optimizer
         self.criterion = criterion
@@ -21,22 +24,102 @@ class DERContinualSMamba:
         self.beta = beta
         self.replay_mode = replay_mode
 
-        # buffer pour DER / DER++
-        self.replay_buffer = []
+        # buffers (IDENTIQUE à SAMFormer)
+        self.x_buffer = None          # encoder input
+        self.x_mark_buffer = None
+        self.dec_inp_buffer = None
+        self.y_mark_buffer = None
 
-    # ---------------- Reservoir sampling ----------------
-    def reservoir_sampling(self, new_item):
-        if self.replay_buffer_size == 0:
-            return
-        if len(self.replay_buffer) < self.replay_buffer_size:
-            self.replay_buffer.append(new_item)
-        else:
-            idx = random.randint(0, len(self.replay_buffer))
-            if idx < self.replay_buffer_size:
-                self.replay_buffer[idx] = new_item
+        self.y_buffer = None
+        self.logits_buffer = None
+        self.task_id_buffer = None
 
-    # ---------------- Fit one task ----------------
-    def fit_one_task(self, train_loader, label_len, pred_len, task_idx=0, epochs=5):
+        self.buffer_filled = 0
+        self.n_seen_examples = 0
+
+    # --------------------------------------------------
+    # Reservoir Sampling (STRICTEMENT IDENTIQUE)
+    # --------------------------------------------------
+    def _add_to_buffer(self, x, x_mark, dec_inp, y_mark,
+                       y=None, logits=None, task_id=None):
+
+        batch_size = x.shape[0]
+
+        if self.x_buffer is None:
+            self.x_buffer = torch.zeros(
+                (self.replay_buffer_size, *x.shape[1:]), dtype=torch.float32
+            )
+            self.x_mark_buffer = torch.zeros(
+                (self.replay_buffer_size, *x_mark.shape[1:]), dtype=torch.float32
+            )
+            self.dec_inp_buffer = torch.zeros(
+                (self.replay_buffer_size, *dec_inp.shape[1:]), dtype=torch.float32
+            )
+            self.y_mark_buffer = torch.zeros(
+                (self.replay_buffer_size, *y_mark.shape[1:]), dtype=torch.float32
+            )
+
+            if y is not None:
+                self.y_buffer = torch.zeros(
+                    (self.replay_buffer_size, *y.shape[1:]), dtype=torch.float32
+                )
+            if logits is not None:
+                self.logits_buffer = torch.zeros(
+                    (self.replay_buffer_size, *logits.shape[1:]), dtype=torch.float32
+                )
+
+            self.task_id_buffer = torch.zeros(
+                (self.replay_buffer_size,), dtype=torch.long
+            )
+
+        for i in range(batch_size):
+            self.n_seen_examples += 1
+
+            if self.buffer_filled < self.replay_buffer_size:
+                idx = self.buffer_filled
+                self.buffer_filled += 1
+            else:
+                idx = random.randint(0, self.n_seen_examples - 1)
+                if idx >= self.replay_buffer_size:
+                    continue
+
+            self.x_buffer[idx] = x[i].detach().cpu()
+            self.x_mark_buffer[idx] = x_mark[i].detach().cpu()
+            self.dec_inp_buffer[idx] = dec_inp[i].detach().cpu()
+            self.y_mark_buffer[idx] = y_mark[i].detach().cpu()
+
+            if y is not None:
+                self.y_buffer[idx] = y[i].detach().cpu()
+            if logits is not None:
+                self.logits_buffer[idx] = logits[i].detach().cpu()
+
+            self.task_id_buffer[idx] = task_id
+
+    # --------------------------------------------------
+    # Sample buffer (IDENTIQUE)
+    # --------------------------------------------------
+    def _sample_buffer(self, batch_size):
+        if self.buffer_filled == 0:
+            return None
+
+        indices = torch.randint(0, self.buffer_filled, (batch_size,))
+
+        return (
+            self.x_buffer[indices].to(self.device),
+            self.x_mark_buffer[indices].to(self.device),
+            self.dec_inp_buffer[indices].to(self.device),
+            self.y_mark_buffer[indices].to(self.device),
+            self.y_buffer[indices].to(self.device) if self.y_buffer is not None else None,
+            self.logits_buffer[indices].to(self.device) if self.logits_buffer is not None else None,
+            self.task_id_buffer[indices].to(self.device),
+        )
+
+    # --------------------------------------------------
+    # Fit one task (ALIGNÉ SAMFormer)
+    # --------------------------------------------------
+    def fit_one_task(self, train_loader, label_len, pred_len,
+                     task_idx=0, epochs=5):
+
         self.model.train()
 
         for epoch in range(epochs):
@@ -48,83 +131,77 @@ class DERContinualSMamba:
                 y = y.to(self.device)
                 y_mark = y_mark.to(self.device)
 
-                # ---- decoder input part of input ----
+                # decoder input
                 dec_inp = torch.cat(
                     [y[:, :label_len, :],
                      torch.zeros_like(y[:, label_len:, :])],
                     dim=1
                 )
 
-                # ================= CURRENT TASK =================
+                # ---------- CURRENT TASK ----------
                 preds = self.model(x, x_mark, dec_inp, y_mark)
                 preds = preds[:, -pred_len:, :]
                 loss = self.criterion(preds, y)
                 task_losses.append(loss.item())
 
-                preds_detached = preds.detach().cpu()
+                preds_detached = preds.detach()
 
-                # ================= REPLAY =================
-                if task_idx > 0 and len(self.replay_buffer) > 0:
-                    batch_size = x.size(0)
-                    replay_idx = np.random.choice(
-                        len(self.replay_buffer),
-                        min(len(self.replay_buffer), batch_size),
-                        replace=False
-                    )
-                    samples = [self.replay_buffer[i] for i in replay_idx]
+                # ---------- REPLAY ----------
+                if self.buffer_filled > 0:
+                    x_m, x_mark_m, dec_m, y_mark_m, y_m, logits_m, _ = \
+                        self._sample_buffer(min(x.size(0), self.buffer_filled))
 
-                    x_m = torch.stack([s["x"] for s in samples]).to(self.device)
-                    x_mark_m = torch.stack([s["x_mark"] for s in samples]).to(self.device)
-                    dec_inp_m = torch.stack([s["dec_inp"] for s in samples]).to(self.device)
-                    y_mark_m = torch.stack([s["y_mark"] for s in samples]).to(self.device)
-
-                    preds_now = self.model(x_m, x_mark_m, dec_inp_m, y_mark_m)
-                    preds_now = preds_now[:, -pred_len:, :]
+                    preds_mem = self.model(x_m, x_mark_m, dec_m, y_mark_m)
+                    preds_mem = preds_mem[:, -pred_len:, :]
 
                     if self.replay_mode == "labels":
-                        y_true = torch.stack([s["y"] for s in samples]).to(self.device)
-                        replay_loss = nn.functional.mse_loss(preds_now, y_true)
+                        replay_loss = nn.functional.mse_loss(preds_mem, y_m)
                     elif self.replay_mode == "logits":
-                        old_logits = torch.stack([s["logits"] for s in samples]).to(self.device)
-                        replay_loss = nn.functional.mse_loss(preds_now, old_logits)
+                        replay_loss = nn.functional.mse_loss(preds_mem, logits_m)
                     elif self.replay_mode == "both":
-                        y_true = torch.stack([s["y"] for s in samples]).to(self.device)
-                        old_logits = torch.stack([s["logits"] for s in samples]).to(self.device)
                         replay_loss = (
-                            self.beta * nn.functional.mse_loss(preds_now, y_true) +
-                            (1 - self.beta) * nn.functional.mse_loss(preds_now, old_logits)
+                            self.beta * nn.functional.mse_loss(preds_mem, y_m) +
+                            (1 - self.beta) * nn.functional.mse_loss(preds_mem, logits_m)
                         )
                     else:
-                        raise ValueError("Unknown replay_mode")
+                        replay_loss = 0.0
 
-                    # combine losses
                     loss = loss + self.alpha * replay_loss
                     replay_losses.append(replay_loss.item())
 
-                # ================= BACKWARD =================
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
-                # ================= STORE MEMORY =================
-                for xb, xb_m, yb, yb_m, dinp, logit in zip(
-                    x.cpu(), x_mark.cpu(), y.cpu(), y_mark.cpu(),
-                    dec_inp.cpu(), preds_detached
-                ):
-                    item = {
-                        "x": xb,
-                        "x_mark": xb_m,
-                        "dec_inp": dinp,
-                        "y_mark": yb_m,
-                        "y": yb,
-                        "logits": logit,
-                    }
-                    self.reservoir_sampling(item)
-
             print(
-                f"Epoch {epoch+1}/{epochs} | "
-                f"TaskLoss={np.mean(task_losses):.4f} | "
+                f"Epoch {epoch+1}/{epochs} "
+                f"TaskLoss={np.mean(task_losses):.4f} "
                 f"ReplayLoss={np.mean(replay_losses) if replay_losses else 0:.4f}"
             )
 
-        print(f"Replay buffer size: {len(self.replay_buffer)}")
+        # ---------- FILL BUFFER AFTER TASK (IDENTIQUE SAMFormer) ----------
+        with torch.no_grad():
+            for x, x_mark, y, y_mark in train_loader:
+                dec_inp = torch.cat(
+                    [y[:, :label_len, :],
+                     torch.zeros_like(y[:, label_len:, :])],
+                    dim=1
+                )
+
+                preds = self.model(x.to(self.device),
+                                   x_mark.to(self.device),
+                                   dec_inp.to(self.device),
+                                   y_mark.to(self.device))
+                preds = preds[:, -pred_len:, :]
+
+                if self.replay_mode == "labels":
+                    self._add_to_buffer(x, x_mark, dec_inp, y_mark,
+                                        y=y, task_id=task_idx)
+                elif self.replay_mode == "logits":
+                    self._add_to_buffer(x, x_mark, dec_inp, y_mark,
+                                        logits=preds, task_id=task_idx)
+                elif self.replay_mode == "both":
+                    self._add_to_buffer(x, x_mark, dec_inp, y_mark,
+                                        y=y, logits=preds, task_id=task_idx)
+
+        print(f"Replay buffer size after task {task_idx+1}: {self.buffer_filled}")
