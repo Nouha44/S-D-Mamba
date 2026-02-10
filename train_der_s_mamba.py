@@ -124,8 +124,8 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        replay_buffer_size=0,
-        alpha=0.0,
+        replay_buffer_size=200,
+        alpha=1.0,
         beta=0,  # DER++ mixing parameter
         replay_mode="logits"  # "labels", "logits" ou "both"
     )
