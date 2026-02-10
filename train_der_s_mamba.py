@@ -9,7 +9,7 @@ from der_continual_s_mamba2 import DERContinualSMamba  # nouvelle version strict
 import random
 
 # ---------------- CONFIG ----------------
-SEQ_LEN = 128
+SEQ_LEN = 256
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
 BATCH_SIZE = 64
@@ -124,7 +124,7 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        replay_buffer_size=200,
+        replay_buffer_size=0,
         alpha=0.0,
         beta=0,  # DER++ mixing parameter
         replay_mode="both"  # "labels", "logits" ou "both"
