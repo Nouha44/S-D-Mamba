@@ -109,13 +109,12 @@ def main():
         dropout = 0.1
         activation = "gelu"
         embed = "timeF"
-        freq = "h"
         output_attention = False
         use_norm = True
         class_strategy = "projection"
 
     model = Model(Config()).to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
 
     # ----- DER Continual Learning -----
@@ -127,7 +126,7 @@ def main():
         replay_buffer_size=0,
         alpha=0.0,
         beta=0,  # DER++ mixing parameter
-        replay_mode="both"  # "labels", "logits" ou "both"
+        replay_mode="logits"  # "labels", "logits" ou "both"
     )
 
     # ================= METRICS =================
