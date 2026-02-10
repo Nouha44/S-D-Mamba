@@ -110,6 +110,7 @@ def main():
         activation = "gelu"
         embed = "timeF"
         output_attention = False
+        freq= 'm'
         use_norm = True
         class_strategy = "projection"
 
