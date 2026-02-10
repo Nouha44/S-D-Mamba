@@ -174,15 +174,108 @@ def main():
     print(f"\n📊 Final Average RMSE (after T{num_tasks}): {final_rmse:.4f}")
 
     # Backward Transfer (BWT)
+    # ----- METRICS CONTINUAL -----
+    final_rmse = np.nanmean(results_matrix[-1])
+    print(f"\n📊 Final Average RMSE (after all tasks): {final_rmse:.4f}")
+
     bwt_values = []
-    for task_id in range(num_tasks - 1):
+    for task_id in range(num_tasks-1):
         perf_after_learned = results_matrix[task_id, task_id]
         perf_after_final = results_matrix[-1, task_id]
-        bwt_values.append(perf_after_final - perf_after_learned)
-
-    bwt = np.mean(bwt_values)
+        if not np.isnan(perf_after_learned) and not np.isnan(perf_after_final):
+            bwt_values.append(perf_after_final - perf_after_learned)
+    bwt = np.mean(bwt_values) if len(bwt_values) > 0 else np.nan
     print(f"📉 Backward Transfer (BWT): {bwt:.4f}")
 
+    # ----- IMPACT DE LA TAILLE DU BUFFER -----
+    buffer_sizes = [0, 150 ,300, 500, 1000, 1500, 2000, 2500]
+    rmse_totals = []
+    rmse_per_task = np.zeros((num_tasks, len(buffer_sizes)))
+    bwt_totals = []
+    bwt_per_task = np.zeros((num_tasks-1, len(buffer_sizes)))
+
+    for b_idx, buf_size in enumerate(buffer_sizes):
+        set_seed(42)
+        print(f"\n--- Training with buffer size = {buf_size} ---")
+        model = DERContinualSAMFormer(
+            learning_rate=1e-3,
+            batch_size=64,
+            num_epochs=5,
+            replay_buffer_size=buf_size,
+            alpha=1,
+            beta=None,
+            replay_mode="logits",
+            device=device
+        )
+        model.create_network(tasks[0]["x_train"], tasks[0]["y_train"])
+        optimizer = torch.optim.Adam(model.network.parameters(), lr=model.learning_rate)
+        criterion = nn.MSELoss().to(device)
+
+        # RMSE juste après chaque tâche
+        rmse_after_each_task = []
+
+        for t_idx, task in enumerate(tasks):
+            model.fit_one_task(task["x_train"], task["y_train"], optimizer, criterion, task_idx=t_idx)
+            rmse_task, _ = evaluate_rmse(model, task["x_test"], task["y_test"], device)
+            rmse_after_each_task.append(rmse_task)
+
+        # RMSE finale pour chaque tâche après tout l’apprentissage
+        rmse_final_all_tasks = []
+        for t_idx, task in enumerate(tasks):
+            rmse_task, _ = evaluate_rmse(model, task["x_test"], task["y_test"], device)
+            rmse_per_task[t_idx, b_idx] = rmse_task
+            rmse_final_all_tasks.append(rmse_task)
+
+        rmse_totals.append(np.mean(rmse_final_all_tasks))
+
+        # Calcul BWT réel pour chaque tâche
+        bwt_values_buffer = []
+        for task_id in range(num_tasks-1):
+            perf_after_learned = rmse_after_each_task[task_id]
+            perf_after_final = rmse_final_all_tasks[task_id]
+            bwt_task = perf_after_final - perf_after_learned
+            bwt_per_task[task_id, b_idx] = bwt_task
+            bwt_values_buffer.append(bwt_task)
+
+        bwt_totals.append(np.mean(bwt_values_buffer))
+        print(f"Buffer {buf_size} -> Final Avg RMSE: {rmse_totals[-1]:.4f}, BWT: {bwt_totals[-1]:.4f}")
+
+    # ----- PLOTS -----
+    # Plot 1: RMSE totale vs buffer
+    plt.figure(figsize=(8,4))
+    plt.plot(buffer_sizes, rmse_totals, 'o-', color='blue', linewidth=2)
+    plt.xlabel("Replay Buffer Size")
+    plt.ylabel("Final Average RMSE")
+    plt.title("Impact of Replay Buffer Size on Overall RMSE")
+    plt.grid(True)
+    plt.show()
+
+    # Plot 2: RMSE par tâche vs buffer
+    plt.figure(figsize=(8,4))
+    colors = ['blue', 'green', 'red', 'orange']
+    for t_idx in range(num_tasks):
+        plt.plot(buffer_sizes, rmse_per_task[t_idx], 'o-', color=colors[t_idx], label=f'Task {t_idx+1}')
+    plt.xlabel("Replay Buffer Size")
+    plt.ylabel("Final RMSE per Task")
+    plt.title("Impact of Buffer Size on RMSE per Task (After All Tasks)")
+    plt.legend()
+    plt.grid(True)
+    plt.save('RMSE_der.png')
+    plt.show()
+
+    # Plot 3: BWT vs buffer
+    plt.figure(figsize=(8,4))
+    plt.plot(buffer_sizes, bwt_totals, 'o-', color='black', linewidth=2, label='BWT total')
+    colors = ['blue', 'green', 'red']
+    for t_idx in range(num_tasks-1):
+        plt.plot(buffer_sizes, bwt_per_task[t_idx], 'o--', color=colors[t_idx], label=f'BWT Task {t_idx+1}')
+    plt.xlabel("Replay Buffer Size")
+    plt.ylabel("Backward Transfer (BWT)")
+    plt.title("Evolution of Backward Transfer with Buffer Size")
+    plt.legend()
+    plt.grid(True)
+    plt.save('backward_transfer_der.png')
+    plt.show()
 
 if __name__ == "__main__":
     main()
