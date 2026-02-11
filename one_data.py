@@ -26,7 +26,7 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
     random.seed(42)
-    
+
 # ================= DATASET =================
 class WeatherDataset(torch.utils.data.Dataset):
     def __init__(self, data, seq_len, pred_len):
@@ -103,14 +103,14 @@ def main():
 
         train_loader, test_loader = load_task(path)
 
-        # sample for model init
+        # Sample pour l'initialisation du modèle
         x_sample, _, y_sample, _ = next(iter(train_loader))
 
-        # -------- NEW MODEL EACH TIME --------
+        # -------- DER MODEL INITIALIZATION --------
         model = DERContinualSMamba(
             config=Config(),
-            replay_buffer_size=0,   # ❌ no replay
-            alpha=0.0,              # ❌ no DER loss
+            replay_buffer_size=0,  # ❌ no replay
+            alpha=0.0,             # ❌ no DER loss
             beta=0.0,
             replay_mode=None,
             device=DEVICE
@@ -128,7 +128,7 @@ def main():
             criterion=criterion,
             label_len=LABEL_LEN,
             pred_len=PRED_LEN,
-            task_idx=0,   # ⚠️ always 0
+            task_idx=0,  # ⚠️ toujours 0
             epochs=EPOCHS
         )
 
@@ -153,7 +153,6 @@ def main():
 
     print("\n=== SINGLE TASK RESULTS ===")
     print(df)
-
 
 # ================= RUN =================
 if __name__ == "__main__":
