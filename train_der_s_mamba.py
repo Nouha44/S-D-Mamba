@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from torch import nn
 from torch.utils.data import DataLoader
 import random
-
+import os
 from model.S_Mamba import Model
 from der_continual_s_mamba2 import DERContinualSMamba
 os.environ["PYTHONHASHSEED"] = "42"
