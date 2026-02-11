@@ -3,7 +3,6 @@ import numpy as np
 import random
 from torch import nn
 
-
 class DERContinualSMamba:
     """
     Dark Experience Replay (DER / DER++) for forecasting with S-Mamba,
@@ -94,17 +93,14 @@ class DERContinualSMamba:
     # ---------------- Fit one task ----------------
     def fit_one_task(self, x, x_mark, y, y_mark, optimizer, criterion, task_idx=0):
         self.model.train()
-        x = torch.tensor(x, dtype=torch.float32).to(self.device)
-        x_mark = torch.tensor(x_mark, dtype=torch.float32).to(self.device)
-        y = torch.tensor(y, dtype=torch.float32).to(self.device)
-        y_mark = torch.tensor(y_mark, dtype=torch.float32).to(self.device)
 
-        x = x.to(self.device)
-        x_mark = x_mark.to(self.device)
-        y = y.to(self.device)
-        y_mark = y_mark.to(self.device)
+        # ---------------- Convert to tensor ----------------
+        x = torch.tensor(x, dtype=torch.float32, device=self.device)
+        x_mark = torch.tensor(x_mark, dtype=torch.float32, device=self.device)
+        y = torch.tensor(y, dtype=torch.float32, device=self.device)
+        y_mark = torch.tensor(y_mark, dtype=torch.float32, device=self.device)
 
-        # Prepare decoder input
+        # ---------------- Decoder input ----------------
         dec_inp = torch.cat([y[:, :y_mark.shape[1], :],
                              torch.zeros_like(y[:, y_mark.shape[1]:, :])], dim=1)
 
