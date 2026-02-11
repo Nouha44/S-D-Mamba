@@ -114,7 +114,7 @@ def main():
 
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
     if der.network is None:
-        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader[0]))
+        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loaders[0]))
         der.create_network(x_sample, y_sample)
 
     optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
@@ -177,7 +177,7 @@ def main():
             device=DEVICE
         )
         if der_buf.network is None:
-            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader[0]))
+            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loaders[0]))
             der_buf.create_network(x_sample, y_sample)
 
         optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
