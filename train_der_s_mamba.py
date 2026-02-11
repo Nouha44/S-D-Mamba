@@ -118,6 +118,7 @@ def main():
         der.create_network(x_sample, y_sample)
 
     optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
+    criterion = nn.MSELoss()
     # ================= TRAIN TASKS =================
     for t_idx, train_loader in enumerate(train_loaders):
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
