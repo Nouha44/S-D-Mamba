@@ -2,29 +2,26 @@ import torch
 import numpy as np
 import random
 from torch import nn
-from samformer.samformer import SAMFormerArchitecture
+from model.S_Mamba import Model  # ton S-Mamba ici
 
 
 class DERContinualSMamba:
     """
     Dark Experience Replay (DER / DER++) pour forecasting avec S-Mamba
-    Implémentation ALIGNÉE avec DERContinualSAMFormer
+    Version “SAMFormer style” : crée le network à l’intérieur et passe optimizer/criterion dans fit_one_task
     """
 
-    def __init__(self, model, optimizer, criterion, device,
-                 replay_buffer_size=500, alpha=1.0, beta=0.5,
-                 replay_mode="labels"):
-        self.model = model
-        self.optimizer = optimizer
-        self.criterion = criterion
-        self.device = device
+    def __init__(self, config, replay_buffer_size=500, alpha=1.0, beta=0.5,
+                 replay_mode="labels", device="cpu"):
+        self.config = config
         self.replay_buffer_size = replay_buffer_size
         self.alpha = alpha
         self.beta = beta
         self.replay_mode = replay_mode
+        self.device = device
 
-        # buffers (IDENTIQUE à SAMFormer)
-        self.x_buffer = None  # encoder input
+        # Buffers
+        self.x_buffer = None
         self.x_mark_buffer = None
         self.dec_inp_buffer = None
         self.y_mark_buffer = None
@@ -35,9 +32,10 @@ class DERContinualSMamba:
         self.buffer_filled = 0
         self.n_seen_examples = 0
 
-    # --------------------------------------------------
-    # Reservoir Sampling (STRICTEMENT IDENTIQUE)
-    # --------------------------------------------------
+        # Network sera créé plus tard
+        self.network = None
+
+    # ---------------- Reservoir Sampling ----------------
     def _add_to_buffer(self, x, x_mark, dec_inp, y_mark, y=None, logits=None, task_id=None):
         batch_size = x.shape[0]
 
@@ -87,9 +85,7 @@ class DERContinualSMamba:
                 self.logits_buffer[idx] = logits[i].detach().cpu()
             self.task_id_buffer[idx] = task_id
 
-    # --------------------------------------------------
-    # Sample buffer (IDENTIQUE)
-    # --------------------------------------------------
+    # ---------------- Sample from buffer ----------------
     def _sample_buffer(self, batch_size):
         if self.buffer_filled == 0:
             return None
@@ -105,14 +101,24 @@ class DERContinualSMamba:
             self.task_id_buffer[indices].to(self.device),
         )
 
-    # --------------------------------------------------
-    # Fit one task (ALIGNÉ SAMFormer)
-    # --------------------------------------------------
-    def fit_one_task(self, train_loader, label_len, pred_len, task_idx=0, epochs=5):
-        self.model.train()
+    # ---------------- Create network ----------------
+    def create_network(self, x_sample, y_sample):
+        """
+        Crée le modèle S-Mamba avec les dimensions de x_sample et y_sample
+        """
+        self.network = Model(self.config).to(self.device)
+
+    # ---------------- Fit one task ----------------
+    def fit_one_task(self, train_loader, optimizer, criterion, label_len, pred_len, task_idx=0, epochs=5):
+        if self.network is None:
+            # prend un batch pour init le modèle si pas encore créé
+            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+            self.create_network(x_sample, y_sample)
+
+        self.network.train()
 
         for epoch in range(epochs):
-            task_losses, replay_losses = []
+            task_losses, replay_losses = [], []
 
             for x, x_mark, y, y_mark in train_loader:
                 x = x.to(self.device)
@@ -126,18 +132,17 @@ class DERContinualSMamba:
                 )
 
                 # ---------- CURRENT TASK ----------
-                preds = self.model(x, x_mark, dec_inp, y_mark)
+                preds = self.network(x, x_mark, dec_inp, y_mark)
                 preds = preds[:, -pred_len:, :]
-                loss = self.criterion(preds, y)
+                loss = criterion(preds, y)
                 task_losses.append(loss.item())
-                preds_detached = preds.detach()
 
                 # ---------- REPLAY ----------
                 if self.buffer_filled > 0:
                     x_m, x_mark_m, dec_m, y_mark_m, y_m, logits_m, _ = \
                         self._sample_buffer(min(x.size(0), self.buffer_filled))
 
-                    preds_mem = self.model(x_m, x_mark_m, dec_m, y_mark_m)
+                    preds_mem = self.network(x_m, x_mark_m, dec_m, y_mark_m)
                     preds_mem = preds_mem[:, -pred_len:, :]
 
                     if self.replay_mode == "labels":
@@ -155,9 +160,9 @@ class DERContinualSMamba:
                     loss = loss + self.alpha * replay_loss
                     replay_losses.append(replay_loss.item())
 
-                self.optimizer.zero_grad()
+                optimizer.zero_grad()
                 loss.backward()
-                self.optimizer.step()
+                optimizer.step()
 
             print(
                 f"Epoch {epoch+1}/{epochs} "
@@ -165,14 +170,14 @@ class DERContinualSMamba:
                 f"ReplayLoss={np.mean(replay_losses) if replay_losses else 0:.4f}"
             )
 
-        # ---------- FILL BUFFER AFTER TASK (IDENTIQUE SAMFormer) ----------
+        # ---------- FILL BUFFER AFTER TASK ----------
         with torch.no_grad():
             for x, x_mark, y, y_mark in train_loader:
                 dec_inp = torch.cat(
                     [y[:, :label_len, :], torch.zeros_like(y[:, label_len:, :])], dim=1
                 )
-                preds = self.model(x.to(self.device), x_mark.to(self.device),
-                                   dec_inp.to(self.device), y_mark.to(self.device))
+                preds = self.network(x.to(self.device), x_mark.to(self.device),
+                                     dec_inp.to(self.device), y_mark.to(self.device))
                 preds = preds[:, -pred_len:, :]
 
                 if self.replay_mode == "labels":
