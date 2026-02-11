@@ -114,17 +114,13 @@ def main():
 
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
     if der.network is None:
-        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader[0]))
         der.create_network(x_sample, y_sample)
 
     optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
     # ================= TRAIN TASKS =================
     for t_idx, train_loader in enumerate(train_loaders):
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
-
-
-
-        criterion = nn.MSELoss()
         der.fit_one_task(
             train_loader,
             optimizer=optimizer,
@@ -181,7 +177,7 @@ def main():
             device=DEVICE
         )
         if der_buf.network is None:
-            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader[0]))
             der_buf.create_network(x_sample, y_sample)
 
         optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
