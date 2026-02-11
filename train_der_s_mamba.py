@@ -13,7 +13,7 @@ SEQ_LEN = 256
 PRED_LEN = 128
 LABEL_LEN = SEQ_LEN // 2
 BATCH_SIZE = 64
-EPOCHS = 10
+EPOCHS = 5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ================= SEED =================
@@ -183,7 +183,11 @@ def main():
 
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
-            optimizer = torch.optim.AdamW(der_buf.network.parameters() if der_buf.network else [torch.empty(0)], lr=1e-3)
+            if der.network is None:
+               x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+               der_buf.create_network(x_sample, y_sample)
+
+            optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
             criterion = nn.MSELoss()
             der_buf.fit_one_task(
                 task,
