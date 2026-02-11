@@ -178,7 +178,7 @@ def main():
 
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
-            model_buf.fit_one_task(task.dataset.data, task.dataset.data, optimizer_buf, criterion_buf, task_idx=t_idx)
+            model_buf.fit_one_task(task, label_len=LABEL_LEN, pred_len=PRED_LEN, task_idx=t_idx, epochs=EPOCHS)
             rmse_task = evaluate_rmse(model_buf, task, LABEL_LEN, PRED_LEN, DEVICE)
             rmse_after_each_task.append(rmse_task)
 
