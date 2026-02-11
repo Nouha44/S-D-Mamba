@@ -20,9 +20,12 @@ def load_csv_as_series(path):
     df = pd.read_csv(path)
     return df['values'].values.astype(np.float32)
 
-def create_windows(series, seq_len=60, pred_horizon=10):
+def create_windows(series, seq_len=256, pred_horizon=128):
     """
     Crée x_enc, x_mark, dec_inp, y_mark, y pour S-Mamba
+    Shapes attendues par S-Mamba :
+        x, x_mark: (num_samples, seq_len, input_dim)
+        y, y_mark, dec_inp: (num_samples, pred_horizon, output_dim)
     """
     x_list, y_list = [], []
     total_len = seq_len + pred_horizon
@@ -30,14 +33,23 @@ def create_windows(series, seq_len=60, pred_horizon=10):
         x_list.append(series[i:i+seq_len])
         y_list.append(series[i+seq_len:i+total_len])
 
-    x = np.array(x_list).reshape(-1, 1, seq_len).astype(np.float32)       # encoder input
-    y = np.array(y_list).reshape(-1, pred_horizon, 1).astype(np.float32)  # target
+    # Convertir en numpy float32
+    x = np.array(x_list, dtype=np.float32)       # (num_samples, seq_len)
+    y = np.array(y_list, dtype=np.float32)       # (num_samples, pred_horizon)
 
-    x_mark = x.copy()
+    # Ajouter la dimension "feature" à la fin
+    x = x[..., np.newaxis]   # (num_samples, seq_len, 1)
+    y = y[..., np.newaxis]   # (num_samples, pred_horizon, 1)
+
+    x_mark = x.copy()        # timestamp / covariates
     y_mark = y.copy()
-    dec_inp = np.concatenate([y[:, :pred_horizon//2, :], np.zeros_like(y[:, pred_horizon//2:, :])], axis=1)
+
+    # Decoder input : première moitié vraie, deuxième moitié zéro
+    dec_inp = np.concatenate([y[:, :pred_horizon//2, :],
+                              np.zeros_like(y[:, pred_horizon//2:, :])], axis=1)
 
     return x, x_mark, dec_inp, y_mark, y
+
 
 def evaluate_rmse(model, x, x_mark, dec_inp, y_mark, y, device):
     model.model.eval()
