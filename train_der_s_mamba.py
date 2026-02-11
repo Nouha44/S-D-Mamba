@@ -5,12 +5,9 @@ import matplotlib.pyplot as plt
 from torch import nn
 from torch.utils.data import DataLoader
 import random
-import os
 from model.S_Mamba import Model
 from der_continual_s_mamba2 import DERContinualSMamba
-os.environ["PYTHONHASHSEED"] = "42"
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-torch.use_deterministic_algorithms(True)
+
 # ================= CONFIG =================
 SEQ_LEN = 256
 PRED_LEN = 128
@@ -27,6 +24,7 @@ def set_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
 
 set_seed(42)
 
@@ -43,7 +41,6 @@ class WeatherDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         x = self.data[idx: idx + self.seq_len]
         y = self.data[idx + self.seq_len: idx + self.seq_len + self.pred_len]
-        # x_mark et y_mark remplis à 0 pour S-Mamba
         return x, torch.zeros_like(x), y, torch.zeros_like(y)
 
 def load_task(path):
@@ -51,8 +48,8 @@ def load_task(path):
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
     split = int(0.8 * len(ds))
     return (
-        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True),
-        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE)
+        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0),
+        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0)
     )
 
 # ================= EVALUATION =================
@@ -100,7 +97,7 @@ def main():
         dropout = 0.1
         activation = "gelu"
         embed = "timeF"
-        freq= 'm'
+        freq = 'm'
         output_attention = False
         use_norm = True
         class_strategy = "projection"
@@ -173,18 +170,17 @@ def main():
             beta=0,
             replay_mode="logits"
         )
-        # ⚠️ Task 1 identique
-
 
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
+            # Pass DataLoader directly
             model_buf.fit_one_task(task, label_len=LABEL_LEN, pred_len=PRED_LEN, task_idx=t_idx, epochs=EPOCHS)
-            rmse_task = evaluate_rmse(model_buf, task, LABEL_LEN, PRED_LEN, DEVICE)
+            rmse_task = evaluate_rmse(model_buf.model, task, LABEL_LEN, PRED_LEN, DEVICE)
             rmse_after_each_task.append(rmse_task)
 
         rmse_final_all_tasks = []
         for t_idx, task in enumerate(train_loaders):
-            rmse_task = evaluate_rmse(model_buf, task, LABEL_LEN, PRED_LEN, DEVICE)
+            rmse_task = evaluate_rmse(model_buf.model, task, LABEL_LEN, PRED_LEN, DEVICE)
             rmse_per_task[t_idx, b_idx] = rmse_task
             rmse_final_all_tasks.append(rmse_task)
 
@@ -200,7 +196,6 @@ def main():
         print(f"Buffer {buf_size} -> Final Avg RMSE: {rmse_totals[-1]:.6f}, BWT: {bwt_totals[-1]:.6f}")
 
     # ================= PLOTS =================
-    # Plot 1: RMSE totale vs buffer
     plt.figure(figsize=(8,4))
     plt.plot(buffer_sizes, rmse_totals, 'o-', color='blue', linewidth=2)
     plt.xlabel("Replay Buffer Size")
@@ -210,7 +205,6 @@ def main():
     plt.savefig('RMSE_total_der.png')
     plt.show()
 
-    # Plot 2: RMSE par tâche vs buffer
     plt.figure(figsize=(8,4))
     colors = ['blue', 'green', 'red', 'orange']
     for t_idx in range(num_tasks):
@@ -223,7 +217,6 @@ def main():
     plt.savefig('RMSE_per_task_der.png')
     plt.show()
 
-    # Plot 3: BWT vs buffer
     plt.figure(figsize=(8,4))
     plt.plot(buffer_sizes, bwt_totals, 'o-', color='black', linewidth=2, label='BWT total')
     colors = ['blue', 'green', 'red']
@@ -236,7 +229,6 @@ def main():
     plt.grid(True)
     plt.savefig('backward_transfer_der.png')
     plt.show()
-
 
 if __name__ == "__main__":
     main()
