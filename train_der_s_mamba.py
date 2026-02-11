@@ -113,16 +113,16 @@ def main():
     )
 
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
+    if der.network is None:
+        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+        der.create_network(x_sample, y_sample)
 
+    optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
     # ================= TRAIN TASKS =================
     for t_idx, train_loader in enumerate(train_loaders):
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
 
-        if der.network is None:
-            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
-            der.create_network(x_sample, y_sample)
 
-        optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
 
         criterion = nn.MSELoss()
         der.fit_one_task(
@@ -180,15 +180,15 @@ def main():
             replay_mode="logits",
             device=DEVICE
         )
+        if der_buf.network is None:
+            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+            der_buf.create_network(x_sample, y_sample)
 
+        optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
+        criterion = nn.MSELoss()
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
-            if der_buf.network is None:
-               x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
-               der_buf.create_network(x_sample, y_sample)
 
-            optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
-            criterion = nn.MSELoss()
             der_buf.fit_one_task(
                 task,
                 optimizer=optimizer,
