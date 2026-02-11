@@ -48,7 +48,7 @@ def load_task(path):
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
     split = int(0.8 * len(ds))
     return (
-        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=False, num_workers=0),
+        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0),
         DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0)
     )
 
