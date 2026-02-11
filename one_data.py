@@ -27,8 +27,6 @@ def set_seed(seed=42):
     torch.use_deterministic_algorithms(True)
     random.seed(42)
     
-
-
 # ================= DATASET =================
 class WeatherDataset(torch.utils.data.Dataset):
     def __init__(self, data, seq_len, pred_len):
@@ -155,6 +153,8 @@ def main():
 
     print("\n=== SINGLE TASK RESULTS ===")
     print(df)
-  
-  if __name__ == "__main__":
+
+
+# ================= RUN =================
+if __name__ == "__main__":
     main()
