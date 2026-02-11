@@ -34,6 +34,9 @@ class DERContinualSMamba:
 
         # Network sera créé plus tard
         self.network = None
+        self.gen = torch.Generator()
+        self.gen.manual_seed(42)
+
 
     # ---------------- Reservoir Sampling ----------------
     def _add_to_buffer(self, x, x_mark, dec_inp, y_mark, y=None, logits=None, task_id=None):
@@ -90,7 +93,8 @@ class DERContinualSMamba:
         if self.buffer_filled == 0:
             return None
 
-        indices = torch.randint(0, self.buffer_filled, (batch_size,))
+        indices = torch.randint(0, self.buffer_filled, (batch_size,), generator=self.gen)
+
         return (
             self.x_buffer[indices].to(self.device),
             self.x_mark_buffer[indices].to(self.device),
