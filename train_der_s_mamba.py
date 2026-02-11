@@ -183,7 +183,7 @@ def main():
 
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
-            if der.network is None:
+            if der_buf.network is None:
                x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
                der_buf.create_network(x_sample, y_sample)
 
