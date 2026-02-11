@@ -26,8 +26,9 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
     random.seed(42)
-
-
+    
+GLOBAL_GEN = torch.Generator()
+GLOBAL_GEN.manual_seed(42)
 
 # ================= DATASET =================
 class WeatherDataset(torch.utils.data.Dataset):
@@ -48,11 +49,9 @@ def load_task(path):
     series = pd.read_csv(path)["values"].values.astype("float32")
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
     split = int(0.8 * len(ds))
-    g = torch.Generator()
-    g.manual_seed(42)
     return (
-        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0, generator=g),
-        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0, generator=g)
+        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0, generator=GLOBAL_GEN),
+        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0, generator=GLOBAL_GEN)
     )
 
 # ================= EVALUATION =================
@@ -104,7 +103,9 @@ def main():
         output_attention = False
         use_norm = True
         class_strategy = "projection"
-
+        
+    set_seed(42)
+    x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loaders[0]))
     # ----- INITIAL MODEL DER -----
     der = DERContinualSMamba(
         config=Config(),
@@ -116,14 +117,15 @@ def main():
     )
 
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
-    if der.network is None:
-        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loaders[0]))
-        der.create_network(x_sample, y_sample)
+
+        
+    der.create_network(x_sample, y_sample)
 
     optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
     # ================= TRAIN TASKS =================
     for t_idx, train_loader in enumerate(train_loaders):
+        set_seed(42)
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
         der.fit_one_task(
             train_loader,
@@ -172,6 +174,8 @@ def main():
         print(f"\n--- Training with buffer size = {buf_size} ---")
 
         # Nouveau DER avec buffer modifié
+        set_seed(42)
+
         der_buf = DERContinualSMamba(
             config=Config(),
             replay_buffer_size=buf_size,
@@ -180,15 +184,14 @@ def main():
             replay_mode="logits",
             device=DEVICE
         )
-        if der_buf.network is None:
-            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loaders[0]))
-            der_buf.create_network(x_sample, y_sample)
+
+        der_buf.create_network(x_sample, y_sample)
 
         optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
         criterion = nn.MSELoss()
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
-
+            set_seed(42)
             der_buf.fit_one_task(
                 task,
                 optimizer=optimizer,
