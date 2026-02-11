@@ -160,7 +160,7 @@ def main():
     print(f"📉 Backward Transfer (BWT): {bwt:.6f}")
 
     # ================= IMPACT DU BUFFER =================
-    buffer_sizes = [0, 150, 300, 500, 1000, 1500, 2000, 2500]
+    buffer_sizes = [0, 150, 200, 300, 500, 1000, 1500, 2000, 2500]
     rmse_totals = []
     rmse_per_task = np.zeros((num_tasks, len(buffer_sizes)))
     bwt_totals = []
