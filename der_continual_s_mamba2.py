@@ -94,6 +94,10 @@ class DERContinualSMamba:
     # ---------------- Fit one task ----------------
     def fit_one_task(self, x, x_mark, y, y_mark, optimizer, criterion, task_idx=0):
         self.model.train()
+        x = torch.tensor(x, dtype=torch.float32).to(self.device)
+        x_mark = torch.tensor(x_mark, dtype=torch.float32).to(self.device)
+        y = torch.tensor(y, dtype=torch.float32).to(self.device)
+        y_mark = torch.tensor(y_mark, dtype=torch.float32).to(self.device)
 
         x = x.to(self.device)
         x_mark = x_mark.to(self.device)
