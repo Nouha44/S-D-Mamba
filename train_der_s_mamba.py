@@ -118,8 +118,12 @@ def main():
     for t_idx, train_loader in enumerate(train_loaders):
         print(f"\n=== TRAIN TASK {t_idx+1} ===")
 
-        # Fit task (créera le network à l'intérieur si nécessaire)
-        optimizer = torch.optim.AdamW(der.network.parameters() if der.network else [torch.empty(0)], lr=1e-3)
+        if der.network is None:
+            x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loader))
+            der.create_network(x_sample, y_sample)
+
+        optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
+
         criterion = nn.MSELoss()
         der.fit_one_task(
             train_loader,
