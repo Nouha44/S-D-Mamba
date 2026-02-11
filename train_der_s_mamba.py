@@ -18,7 +18,7 @@ def set_seed(seed=42):
 
 def load_csv_as_series(path):
     df = pd.read_csv(path)
-    return df['lead_1'].values.astype(np.float32)
+    return df['values'].values.astype(np.float32)
 
 def create_windows(series, seq_len=60, pred_horizon=10):
     """
@@ -71,13 +71,13 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     dataset_paths = [
-        "101_ecg.csv",
-        "100_ecg.csv",
-        "102_ecg.csv",
-        "103_ecg.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d1_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d2_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d3_full.csv",
+        "/home/nkaraoul/timesfm_backup/mult_sin_d4_full.csv",
     ]
 
-    seq_len, pred_horizon = 60, 10
+    seq_len, pred_horizon = 256, 128
     tasks = []
 
     for path in dataset_paths:
