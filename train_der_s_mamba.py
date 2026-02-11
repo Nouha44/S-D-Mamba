@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import pandas as pd
@@ -5,6 +6,7 @@ import matplotlib.pyplot as plt
 from torch import nn
 from torch.utils.data import DataLoader
 import random
+import os
 from model.S_Mamba import Model
 from der_continual_s_mamba2 import DERContinualSMamba
 
@@ -16,16 +18,20 @@ BATCH_SIZE = 64
 EPOCHS = 5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# ================= SEED =================
+# ================= REPRODUCIBILITY =================
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    # Strict deterministic ops
     torch.use_deterministic_algorithms(True)
 
+# ⚠️ Ensure CuBLAS determinism
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
 set_seed(42)
 
 # ================= DATASET =================
@@ -41,6 +47,7 @@ class WeatherDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         x = self.data[idx: idx + self.seq_len]
         y = self.data[idx + self.seq_len: idx + self.seq_len + self.pred_len]
+        # x_mark and y_mark for S-Mamba
         return x, torch.zeros_like(x), y, torch.zeros_like(y)
 
 def load_task(path):
@@ -49,7 +56,7 @@ def load_task(path):
     split = int(0.8 * len(ds))
     return (
         DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0),
-        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0)
+        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     )
 
 # ================= EVALUATION =================
@@ -148,8 +155,8 @@ def main():
     bwt = np.mean(bwt_values)
     print(f"📉 Backward Transfer (BWT): {bwt:.6f}")
 
-    # ================= IMPACT DU BUFFER =================
-    buffer_sizes = [0, 150 ,300, 500, 1000, 1500, 2000, 2500]
+    # ================= IMPACT OF BUFFER =================
+    buffer_sizes = [0, 150, 300, 500, 1000, 1500, 2000, 2500]
     rmse_totals = []
     rmse_per_task = np.zeros((num_tasks, len(buffer_sizes)))
     bwt_totals = []
@@ -161,8 +168,8 @@ def main():
         print(f"\n--- Training with buffer size = {buf_size} ---")
 
         model_buf = DERContinualSMamba(
-            model=model,
-            optimizer=optimizer,
+            model=Model(Config()).to(DEVICE),
+            optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
             criterion=criterion,
             device=DEVICE,
             replay_buffer_size=buf_size,
@@ -173,7 +180,6 @@ def main():
 
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
-            # Pass DataLoader directly
             model_buf.fit_one_task(task, label_len=LABEL_LEN, pred_len=PRED_LEN, task_idx=t_idx, epochs=EPOCHS)
             rmse_task = evaluate_rmse(model_buf.model, task, LABEL_LEN, PRED_LEN, DEVICE)
             rmse_after_each_task.append(rmse_task)
@@ -229,6 +235,7 @@ def main():
     plt.grid(True)
     plt.savefig('backward_transfer_der.png')
     plt.show()
+
 
 if __name__ == "__main__":
     main()
