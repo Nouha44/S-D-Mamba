@@ -25,8 +25,9 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
+    random.seed(42)
 
-set_seed(42)
+
 
 # ================= DATASET =================
 class WeatherDataset(torch.utils.data.Dataset):
@@ -47,9 +48,11 @@ def load_task(path):
     series = pd.read_csv(path)["values"].values.astype("float32")
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
     split = int(0.8 * len(ds))
+    g = torch.Generator()
+    g.manual_seed(42)
     return (
-        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0),
-        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0)
+        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0, generator=g),
+        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0, generator=g)
     )
 
 # ================= EVALUATION =================
