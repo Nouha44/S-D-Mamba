@@ -119,7 +119,7 @@ def main():
         optimizer=optimizer,
         criterion=criterion,
         device=DEVICE,
-        replay_buffer_size=200,
+        replay_buffer_size=0,
         alpha=1.0,
         beta=0,
         replay_mode="logits"
@@ -166,6 +166,7 @@ def main():
         set_seed(42)
         torch.cuda.empty_cache()
         print(f"\n--- Training with buffer size = {buf_size} ---")
+        
 
         model_buf = DERContinualSMamba(
             model=Model(Config()).to(DEVICE),
@@ -177,7 +178,8 @@ def main():
             beta=0,
             replay_mode="logits"
         )
-
+        model_buf = Model(Config()).to(DEVICE)
+        optimizer_buf = torch.optim.AdamW(model_buf.parameters(), lr=1e-3)
         rmse_after_each_task = []
         for t_idx, task in enumerate(train_loaders):
             model_buf.fit_one_task(task, label_len=LABEL_LEN, pred_len=PRED_LEN, task_idx=t_idx, epochs=EPOCHS)
