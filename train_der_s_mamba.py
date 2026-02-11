@@ -8,7 +8,6 @@ import random
 
 from model.S_Mamba import Model
 from der_continual_s_mamba2 import DERContinualSMamba
-from samformer.der_cont import DERContinualSAMFormer  # la classe DER améliorée
 os.environ["PYTHONHASHSEED"] = "42"
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 torch.use_deterministic_algorithms(True)
