@@ -27,8 +27,7 @@ def set_seed(seed=42):
     torch.use_deterministic_algorithms(True)
     random.seed(42)
     
-GLOBAL_GEN = torch.Generator()
-GLOBAL_GEN.manual_seed(42)
+
 
 # ================= DATASET =================
 class WeatherDataset(torch.utils.data.Dataset):
@@ -49,9 +48,13 @@ def load_task(path):
     series = pd.read_csv(path)["values"].values.astype("float32")
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
     split = int(0.8 * len(ds))
+    train_gen = torch.Generator()
+    train_gen.manual_seed(42)
+    test_gen = torch.Generator()
+    test_gen.manual_seed(42)
     return (
-        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0, generator=GLOBAL_GEN),
-        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0, generator=GLOBAL_GEN)
+        DataLoader(torch.utils.data.Subset(ds, range(split)), batch_size=BATCH_SIZE, shuffle=True, num_workers=0, generator=train_gen),
+        DataLoader(torch.utils.data.Subset(ds, range(split, len(ds))), batch_size=BATCH_SIZE, num_workers=0, generator=test_gen)
     )
 
 # ================= EVALUATION =================
@@ -169,8 +172,7 @@ def main():
     bwt_per_task = np.zeros((num_tasks-1, len(buffer_sizes)))
 
     for b_idx, buf_size in enumerate(buffer_sizes):
-        set_seed(42)
-        torch.cuda.empty_cache()
+
         print(f"\n--- Training with buffer size = {buf_size} ---")
 
         # Nouveau DER avec buffer modifié
