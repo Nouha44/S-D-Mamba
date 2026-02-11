@@ -4,7 +4,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from torch import nn
 import random
-from der_continual_s_mamba2 import DERContinualSMamba
+
+from der_continual_s_mamba2 import DERContinualSMamba  # ta classe DER pour S-Mamba
+
 # ----------------------- UTILITAIRES -----------------------
 def set_seed(seed=42):
     random.seed(seed)
@@ -20,7 +22,7 @@ def load_csv_as_series(path):
 
 def create_windows(series, seq_len=60, pred_horizon=10):
     """
-    Crée les entrées x, x_mark, dec_inp, y_mark, y pour S-Mamba
+    Crée x_enc, x_mark, dec_inp, y_mark, y pour S-Mamba
     """
     x_list, y_list = [], []
     total_len = seq_len + pred_horizon
@@ -31,7 +33,6 @@ def create_windows(series, seq_len=60, pred_horizon=10):
     x = np.array(x_list).reshape(-1, 1, seq_len).astype(np.float32)       # encoder input
     y = np.array(y_list).reshape(-1, pred_horizon, 1).astype(np.float32)  # target
 
-    # Pour S-Mamba, simplification : x_mark, dec_inp, y_mark = copies of x/y
     x_mark = x.copy()
     y_mark = y.copy()
     dec_inp = np.concatenate([y[:, :pred_horizon//2, :], np.zeros_like(y[:, pred_horizon//2:, :])], axis=1)
@@ -94,10 +95,10 @@ def main():
 
     num_tasks = len(tasks)
 
-    # ---------------- Training initial ----------------
+    # ---------------- Initial Training ----------------
     print("\n=== Training on all tasks (initial model) ===")
     model = DERContinualSMamba(
-        model=None,  # initial model provided later
+        model=None,  # S-Mamba model added après
         learning_rate=1e-3,
         batch_size=64,
         num_epochs=5,
@@ -108,13 +109,28 @@ def main():
         device=device
     )
 
-    # Ici vous devez initialiser votre modèle S-Mamba
-    from model.S_Mamba import Model as smm
-    model.model = smm.SMambaArchitecture(input_size=1, seq_len=seq_len, pred_horizon=pred_horizon).to(device)
+    # --------------- Instantiate S-Mamba ---------------
+    from model.S_Mamba import Model as SMambaModel
+    from types import SimpleNamespace
+    configs = SimpleNamespace(
+        seq_len=seq_len,
+        pred_len=pred_horizon,
+        output_attention=False,
+        use_norm=True,
+        d_model=32,
+        d_state=16,
+        embed='timeF',
+        freq='h',
+        dropout=0.1,
+        e_layers=2,
+        d_ff=64,
+        activation='gelu',
+        class_strategy=None
+    )
+    model.model = SMambaModel(configs).to(device)
     optimizer = torch.optim.Adam(model.model.parameters(), lr=model.learning_rate)
     criterion = nn.MSELoss().to(device)
 
-    # Probe sample
     probe_samples = [(task["x_test"][0], task["y_test"][0]) for task in tasks]
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
 
@@ -123,14 +139,14 @@ def main():
         model.fit_one_task(task["x_train"], task["x_mark_train"], task["dec_train"],
                            task["y_mark_train"], optimizer, criterion, task_idx=t_idx)
 
-        # Afficher composition du buffer
+        # Replay buffer composition
         print(f"\n📦 Replay buffer size: {model.buffer_filled}")
         if model.task_id_buffer is not None:
             for task_id in range(num_tasks):
                 n_examples = (model.task_id_buffer[:model.buffer_filled] == task_id).sum().item()
                 print(f"  Task {task_id+1}: {n_examples} exemples dans le buffer")
 
-        # Évaluation des tâches vues
+        # Evaluation
         for eval_idx in range(t_idx+1):
             rmse, preds = evaluate_rmse(model,
                                         tasks[eval_idx]["x_test"],
@@ -142,13 +158,116 @@ def main():
             results_matrix[t_idx, eval_idx] = rmse
             print(f"RMSE Task{eval_idx+1} after Task{t_idx+1}: {rmse:.4f}")
 
-            # Plot probe sample
+            # Probe plot
             x_probe, y_probe = probe_samples[eval_idx]
             x_t = torch.tensor(x_probe, dtype=torch.float32).unsqueeze(0).to(device)
             with torch.no_grad():
-                y_pred = model.model(x_t, x_t, x_t, x_t).squeeze(0).cpu().numpy()  # simplification
+                y_pred = model.model(x_t, x_t, x_t, x_t).squeeze(0).cpu().numpy()
             plot_forecast(x_probe, y_probe, y_pred, seq_len, pred_horizon,
                           title=f"Probe Task{eval_idx+1} after Task{t_idx+1}")
+
+    # ---------------- Metrics and Plots ----------------
+    df = pd.DataFrame(results_matrix,
+                      columns=[f"Task{i+1}" for i in range(num_tasks)],
+                      index=[f"after T{i+1}" for i in range(num_tasks)])
+    print("\n=== Global RMSE Results ===")
+    print(df)
+    df.to_csv("der_s_mamba_results.csv", index=True)
+
+    final_rmse = np.nanmean(results_matrix[-1])
+    print(f"\n📊 Final Average RMSE (after all tasks): {final_rmse:.4f}")
+
+    bwt_values = []
+    for task_id in range(num_tasks-1):
+        perf_after_learned = results_matrix[task_id, task_id]
+        perf_after_final = results_matrix[-1, task_id]
+        if not np.isnan(perf_after_learned) and not np.isnan(perf_after_final):
+            bwt_values.append(perf_after_final - perf_after_learned)
+    bwt = np.mean(bwt_values) if len(bwt_values) > 0 else np.nan
+    print(f"📉 Backward Transfer (BWT): {bwt:.4f}")
+
+    # Impact buffer size
+    buffer_sizes = [0, 150 ,300, 500, 1000, 1500, 2000, 2500]
+    rmse_totals = []
+    rmse_per_task = np.zeros((num_tasks, len(buffer_sizes)))
+    bwt_totals = []
+    bwt_per_task = np.zeros((num_tasks-1, len(buffer_sizes)))
+
+    for b_idx, buf_size in enumerate(buffer_sizes):
+        set_seed(42)
+        print(f"\n--- Training with buffer size = {buf_size} ---")
+        model = DERContinualSMamba(
+            model=SMambaModel(configs).to(device),
+            learning_rate=1e-3,
+            batch_size=64,
+            num_epochs=5,
+            replay_buffer_size=buf_size,
+            alpha=2,
+            beta=None,
+            replay_mode="logits",
+            device=device
+        )
+        optimizer = torch.optim.Adam(model.model.parameters(), lr=model.learning_rate)
+        criterion = nn.MSELoss().to(device)
+
+        rmse_after_each_task = []
+
+        for t_idx, task in enumerate(tasks):
+            model.fit_one_task(task["x_train"], task["x_mark_train"], task["dec_train"],
+                               task["y_mark_train"], optimizer, criterion, task_idx=t_idx)
+            rmse_task, _ = evaluate_rmse(model, task["x_test"], task["x_mark_test"],
+                                         task["dec_test"], task["y_mark_test"], task["y_test"], device)
+            rmse_after_each_task.append(rmse_task)
+
+        rmse_final_all_tasks = []
+        for t_idx, task in enumerate(tasks):
+            rmse_task, _ = evaluate_rmse(model, task["x_test"], task["x_mark_test"],
+                                         task["dec_test"], task["y_mark_test"], task["y_test"], device)
+            rmse_per_task[t_idx, b_idx] = rmse_task
+            rmse_final_all_tasks.append(rmse_task)
+        rmse_totals.append(np.mean(rmse_final_all_tasks))
+
+        bwt_values_buffer = []
+        for task_id in range(num_tasks-1):
+            perf_after_learned = rmse_after_each_task[task_id]
+            perf_after_final = rmse_final_all_tasks[task_id]
+            bwt_task = perf_after_final - perf_after_learned
+            bwt_per_task[task_id, b_idx] = bwt_task
+            bwt_values_buffer.append(bwt_task)
+        bwt_totals.append(np.mean(bwt_values_buffer))
+        print(f"Buffer {buf_size} -> Final Avg RMSE: {rmse_totals[-1]:.4f}, BWT: {bwt_totals[-1]:.4f}")
+
+    # Plots (comme dans ton script SAMFormer)
+    plt.figure(figsize=(8,4))
+    plt.plot(buffer_sizes, rmse_totals, 'o-', color='blue', linewidth=2)
+    plt.xlabel("Replay Buffer Size")
+    plt.ylabel("Final Average RMSE")
+    plt.title("Impact of Replay Buffer Size on Overall RMSE")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure(figsize=(8,4))
+    colors = ['blue', 'green', 'red', 'orange']
+    for t_idx in range(num_tasks):
+        plt.plot(buffer_sizes, rmse_per_task[t_idx], 'o-', color=colors[t_idx], label=f'Task {t_idx+1}')
+    plt.xlabel("Replay Buffer Size")
+    plt.ylabel("Final RMSE per Task")
+    plt.title("Impact of Buffer Size on RMSE per Task (After All Tasks)")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    plt.figure(figsize=(8,4))
+    plt.plot(buffer_sizes, bwt_totals, 'o-', color='black', linewidth=2, label='BWT total')
+    colors = ['blue', 'green', 'red']
+    for t_idx in range(num_tasks-1):
+        plt.plot(buffer_sizes, bwt_per_task[t_idx], 'o--', color=colors[t_idx], label=f'BWT Task {t_idx+1}')
+    plt.xlabel("Replay Buffer Size")
+    plt.ylabel("Backward Transfer (BWT)")
+    plt.title("Evolution of Backward Transfer with Buffer Size")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 
 if __name__ == "__main__":
