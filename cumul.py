@@ -134,7 +134,7 @@ def main():
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
 
     # RMSE Task1 après premier training
-    rmse = evaluate_rmse(model, tasks[0]["test_loader"], LABEL_LEN, PRED_LEN, DEVICE)
+    rmse = evaluate_rmse(model.network, tasks[0]["test_loader"], LABEL_LEN, PRED_LEN, DEVICE)
     results_matrix[0, 0] = rmse
     print(f"RMSE Task1 after first training: {rmse:.6f}")
 
@@ -165,7 +165,7 @@ def main():
 
         # évaluation sur tous les tasks vus
         for eval_idx in range(t_idx + 1):
-            rmse = evaluate_rmse(model, tasks[eval_idx]["test_loader"], LABEL_LEN, PRED_LEN, DEVICE)
+            rmse = evaluate_rmse(model.network, tasks[eval_idx]["test_loader"], LABEL_LEN, PRED_LEN, DEVICE)
             results_matrix[t_idx, eval_idx] = rmse
             print(f"RMSE Task{eval_idx+1} after cumulative T{t_idx+1}: {rmse:.6f}")
 
