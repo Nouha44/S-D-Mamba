@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 from model.S_Mamba import Model
 from der_continual_s_mamba2 import DERContinualSMamba
 
-
 # ================= CONFIG =================
 SEQ_LEN = 256
 PRED_LEN = 128
@@ -18,7 +17,6 @@ LABEL_LEN = SEQ_LEN // 2
 BATCH_SIZE = 64
 EPOCHS = 5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 
 # ================= SEED =================
 def set_seed(seed=42):
@@ -29,7 +27,6 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
-
 
 # ================= DATASET =================
 class WeatherDataset(torch.utils.data.Dataset):
@@ -46,7 +43,6 @@ class WeatherDataset(torch.utils.data.Dataset):
         y = self.data[idx + self.seq_len : idx + self.seq_len + self.pred_len]
         return x, torch.zeros_like(x), y, torch.zeros_like(y)
 
-
 def load_task(path):
     series = pd.read_csv(path)["values"].values.astype("float32")
     ds = WeatherDataset(series.reshape(-1, 1), SEQ_LEN, PRED_LEN)
@@ -55,7 +51,6 @@ def load_task(path):
 
     train_gen = torch.Generator()
     train_gen.manual_seed(42)
-
     test_gen = torch.Generator()
     test_gen.manual_seed(42)
 
@@ -75,7 +70,6 @@ def load_task(path):
     )
 
     return train_loader, test_loader
-
 
 # ================= EVALUATION =================
 def evaluate_rmse(model, dataloader, label_len, pred_len, device):
@@ -101,7 +95,6 @@ def evaluate_rmse(model, dataloader, label_len, pred_len, device):
             n += y.numel()
 
     return np.sqrt(mse_sum / n)
-
 
 # ================= MAIN =================
 def main():
@@ -154,9 +147,7 @@ def main():
     )
 
     results_matrix = np.full((num_tasks, num_tasks), np.nan)
-
     der.create_network(x_sample, y_sample)
-
     optimizer = torch.optim.AdamW(der.network.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
 
@@ -185,9 +176,7 @@ def main():
                 DEVICE,
             )
             results_matrix[t_idx, eval_idx] = rmse
-            print(
-                f"RMSE Task{eval_idx + 1} after Task{t_idx + 1}: {rmse:.6f}"
-            )
+            print(f"RMSE Task{eval_idx + 1} after Task{t_idx + 1}: {rmse:.6f}")
 
     # ================= RESULTS =================
     df = pd.DataFrame(
@@ -195,7 +184,6 @@ def main():
         columns=[f"Task{i + 1}" for i in range(num_tasks)],
         index=[f"after T{i + 1}" for i in range(num_tasks)],
     )
-
     print("\n=== Global RMSE Results ===")
     print(df)
     df.to_csv("der_results.csv")
@@ -203,26 +191,19 @@ def main():
     # ================= BWT =================
     final_rmse = np.nanmean(results_matrix[-1])
     print(f"\n📊 Final Average RMSE (after all tasks): {final_rmse:.6f}")
-
-    bwt_values = [
-        results_matrix[-1, i] - results_matrix[i, i]
-        for i in range(num_tasks - 1)
-    ]
+    bwt_values = [results_matrix[-1, i] - results_matrix[i, i] for i in range(num_tasks - 1)]
     bwt = np.mean(bwt_values)
     print(f"📉 Backward Transfer (BWT): {bwt:.6f}")
 
     # ================= IMPACT DU BUFFER =================
     buffer_sizes = [0, 150, 200, 300, 500, 1000, 1500, 2000, 2500]
-
     rmse_totals = []
     rmse_per_task = np.zeros((num_tasks, len(buffer_sizes)))
-
     bwt_totals = []
     bwt_per_task = np.zeros((num_tasks - 1, len(buffer_sizes)))
 
     for b_idx, buf_size in enumerate(buffer_sizes):
         print(f"\n--- Training with buffer size = {buf_size} ---")
-
         set_seed(42)
 
         der_buf = DERContinualSMamba(
@@ -234,17 +215,20 @@ def main():
             device=DEVICE,
         )
 
+        x_sample, x_mark_sample, y_sample, y_mark_sample = next(iter(train_loaders[0]))
         der_buf.create_network(x_sample, y_sample)
-
         optimizer = torch.optim.AdamW(der_buf.network.parameters(), lr=1e-3)
         criterion = nn.MSELoss()
 
+        results_matrix_buffer = np.full((num_tasks, num_tasks), np.nan)
         rmse_after_each_task = []
 
-        for t_idx, task in enumerate(train_loaders):
+        for t_idx, train_loader in enumerate(train_loaders):
             set_seed(42)
+            print(f"\nTraining Task {t_idx + 1} with buffer {buf_size}")
+
             der_buf.fit_one_task(
-                task,
+                train_loader,
                 optimizer=optimizer,
                 criterion=criterion,
                 label_len=LABEL_LEN,
@@ -253,45 +237,60 @@ def main():
                 epochs=EPOCHS,
             )
 
-            rmse_task = evaluate_rmse(
+            # Évaluation sur toutes les tâches vues jusqu’ici
+            for eval_idx in range(t_idx + 1):
+                rmse = evaluate_rmse(
+                    der_buf.network,
+                    test_loaders[eval_idx],
+                    LABEL_LEN,
+                    PRED_LEN,
+                    DEVICE,
+                )
+                results_matrix_buffer[t_idx, eval_idx] = rmse
+                print(f"RMSE Task{eval_idx + 1} after Task{t_idx + 1}: {rmse:.6f}")
+
+            rmse_task_current = evaluate_rmse(
                 der_buf.network,
                 test_loaders[t_idx],
                 LABEL_LEN,
                 PRED_LEN,
                 DEVICE,
             )
-            rmse_after_each_task.append(rmse_task)
+            rmse_after_each_task.append(rmse_task_current)
 
+        # Affichage et sauvegarde dataframe
+        df_buffer = pd.DataFrame(
+            results_matrix_buffer,
+            columns=[f"Task{i + 1}" for i in range(num_tasks)],
+            index=[f"after T{i + 1}" for i in range(num_tasks)],
+        )
+        print(f"\n=== RMSE Matrix for buffer {buf_size} ===")
+        print(df_buffer)
+        df_buffer.to_csv(f"der_results_buffer_{buf_size}.csv")
+
+        # RMSE moyen final
         rmse_final_all_tasks = []
-
-        for t_idx, task in enumerate(test_loaders):
+        for t_idx, test_loader in enumerate(test_loaders):
             rmse_task = evaluate_rmse(
                 der_buf.network,
-                task,
+                test_loader,
                 LABEL_LEN,
                 PRED_LEN,
                 DEVICE,
             )
             rmse_per_task[t_idx, b_idx] = rmse_task
             rmse_final_all_tasks.append(rmse_task)
-
         rmse_totals.append(np.mean(rmse_final_all_tasks))
 
+        # BWT par tâche
         bwt_values_buffer = []
         for task_id in range(num_tasks - 1):
-            bwt_task = (
-                rmse_final_all_tasks[task_id]
-                - rmse_after_each_task[task_id]
-            )
+            bwt_task = rmse_final_all_tasks[task_id] - rmse_after_each_task[task_id]
             bwt_per_task[task_id, b_idx] = bwt_task
             bwt_values_buffer.append(bwt_task)
-
         bwt_totals.append(np.mean(bwt_values_buffer))
 
-        print(
-            f"Buffer {buf_size} -> Final Avg RMSE: "
-            f"{rmse_totals[-1]:.6f}, BWT: {bwt_totals[-1]:.6f}"
-        )
+        print(f"Buffer {buf_size} -> Final Avg RMSE: {rmse_totals[-1]:.6f}, BWT: {bwt_totals[-1]:.6f}")
 
     # ================= PLOTS =================
     plt.figure(figsize=(8, 4))
@@ -339,7 +338,6 @@ def main():
     plt.grid(True)
     plt.savefig("backward_transfer_der.png")
     plt.show()
-
 
 if __name__ == "__main__":
     main()
