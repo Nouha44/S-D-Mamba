@@ -140,7 +140,7 @@ def main():
     der = DERContinualSMamba(
         config=Config(),
         replay_buffer_size=0,
-        alpha=1.0,
+        alpha=0.0,
         beta=0.0,
         replay_mode="logits",
         device=DEVICE,
