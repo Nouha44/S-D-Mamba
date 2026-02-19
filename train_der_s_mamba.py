@@ -139,7 +139,7 @@ def main():
     # ----- INITIAL MODEL DER -----
     der = DERContinualSMamba(
         config=Config(),
-        replay_buffer_size=200,
+        replay_buffer_size=0,
         alpha=1.0,
         beta=0.0,
         replay_mode="logits",
